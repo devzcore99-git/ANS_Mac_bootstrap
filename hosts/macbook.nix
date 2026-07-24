@@ -1,0 +1,31 @@
+{ pkgs, username, hostname, ... }:
+
+{
+  imports = [
+    ../modules/system.nix
+    ../modules/packages.nix
+    ../modules/homebrew.nix
+    ../modules/shell.nix
+  ];
+
+  # Let Determinate manage Nix itself
+  nix.enable = false;
+
+  # Set your hostname
+  networking.hostName = hostname;
+
+  # The primary user (required for system.defaults, homebrew, etc.)
+  system.primaryUser = username;
+
+  # The user
+  users.users.${username} = {
+    name = username;
+    home = "/Users/${username}";
+  };
+
+  # Used for backwards compatibility
+  system.stateVersion = 5;
+
+  # Allow unfree packages
+  nixpkgs.config.allowUnfree = true;
+}
