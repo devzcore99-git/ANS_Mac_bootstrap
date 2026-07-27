@@ -14,7 +14,7 @@
       cd = "z";
 
       # Rebuild system config
-      rebuild = "darwin-rebuild switch --flake ~/CODE_Mac_bootstrap";
+      rebuild = "darwin-rebuild switch --flake ~/AI_Projects/ANS_Mac_bootstrap";
     };
 
     initExtra = ''
