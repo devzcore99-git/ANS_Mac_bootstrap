@@ -1,0 +1,34 @@
+{
+  "name": "ANS_Mac_bootstrap",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/node:2.1.0": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
+    "ghcr.io/devcontainers/features/python:1": {},
+    //"ghcr.io/devcontainers/features/rust:1": {},
+    //"ghcr.io/devcontainers/features/powershell:2": {},
+    //"ghcr.io/devcontainers/features/azure-cli:1": {}
+  },
+
+  //Mount Claude Configuration from guest container 1 time
+  //Auth token will be stored in volume and shared with other Docker containers
+  //that mount claude-code-config
+  //
+  //Github Auth token shared via a bind.  Run these on Host OS to setup
+  //brew install gh
+  // gh auth login
+  // gh auth setup-git
+  "mounts": [
+    "source=claude-code-config,target=/home/vscode/.claude,type=volume",
+    "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly"
+  ],
+
+  //have OAuth file stored in .claude instead of elsewhere
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+  },
+
+  //make sure the mounted directory can be read properly
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude"
+}
