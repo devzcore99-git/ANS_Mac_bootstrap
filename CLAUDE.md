@@ -1,0 +1,47 @@
+# CLAUDE.md - ANS_Mac_bootstrap
+
+Guidance for Claude Code when working in this project.
+
+## Project Overview
+
+Declarative macOS setup for a fresh Apple Silicon Mac: system preferences, CLI
+tools, GUI apps, and shell config, applied from one command. The `ANS_` prefix
+is misleading — there is no Ansible here. It is a nix-darwin + home-manager
+flake (`flake.nix`) with a `bootstrap.sh` wrapper that installs prerequisites
+and activates it.
+
+## Conventions
+
+- **The `.nix` files are the source of truth.** Nothing is generated; edit them
+  directly. `bootstrap.sh` only installs Xcode CLT, Nix, and Homebrew, then
+  builds and activates — it never writes configuration (its `user.nix`
+  generation block is unreachable because `user.nix` is tracked).
+- **Layout**: `flake.nix` (entry) → `hosts/macbook.nix` → `modules/` (system
+  defaults, Nix packages, Homebrew, shell) and `home/` (home-manager: git, zsh).
+  `Utilities/software-audit.sh` is a standalone read-only inventory tool,
+  unrelated to the flake.
+- **Everything must be git-tracked.** Flakes evaluate against the git tree;
+  untracked files are invisible even when present on disk. This is why
+  `user.nix` is committed rather than gitignored.
+- **Machine-specific**: `user.nix` (`username`, `hostname` — the hostname keys
+  the flake output *and* gets applied to the machine), the `rebuild` alias path
+  in `home/zsh.nix`, and the git identity in `home/git.nix` (`userEmail` is
+  still the `you@example.com` placeholder). `flake.nix` hardcodes
+  `aarch64-darwin`.
+- **Re-run safety**: install steps are guarded and the activation is
+  declarative, so re-running converges rather than duplicating. But
+  `modules/homebrew.nix` uses `autoUpdate` + `upgrade` + `cleanup = "zap"`, so
+  every activation updates and upgrades all of Homebrew and uninstalls anything
+  not declared there — never assume a rebuild is cheap or non-destructive.
+  `bootstrap.sh` also runs `git add -A` on every run.
+- Do not run `bootstrap.sh`, `darwin-rebuild`, or `rebuild` to test a change —
+  they modify the live machine.
+- Keep scripts inside macOS bash 3.2 features (no associative arrays,
+  `mapfile`, or `${var^^}`); the shebangs are `#!/bin/bash`.
+
+## Dependencies
+
+Inputs are **unpinned** — `nixpkgs-unstable`, `nix-darwin` master,
+`home-manager` master, with no committed `flake.lock`. Rebuilds are not
+reproducible; committing a lock is the top open item in `recommendations.md`.
+Homebrew casks and `masApps` are likewise unversioned and track upstream.
