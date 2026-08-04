@@ -11,6 +11,15 @@
     //"ghcr.io/devcontainers/features/azure-cli:1": {}
   },
 
+  //Restricted egress firewall (see .devcontainer/init-firewall.sh).  ON by
+  //default; set INIT_FIREWALL to "false" in containerEnv below to disable.
+  //These capabilities let init-firewall.sh program iptables/ipset.  They are
+  //harmless when the firewall is off, so they always stay.
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW"
+  ],
+
   //Mount Claude Configuration from guest container 1 time
   //Auth token will be stored in volume and shared with other Docker containers
   //that mount claude-code-config
@@ -26,9 +35,26 @@
 
   //have OAuth file stored in .claude instead of elsewhere
   "containerEnv": {
-    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    //Restricted egress firewall toggle.  "true" (default) runs
+    //init-firewall.sh on every start; set to "false" to boot with open egress.
+    "INIT_FIREWALL": "true",
   },
 
+  //Install the firewall's tooling once, at container-create time.  curl and
+  //iproute2 are already present on the base image; the rest are what
+  //init-firewall.sh needs.  Re-runs on a rebuild.
+  "onCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends iptables ipset dnsutils aggregate jq curl ca-certificates iproute2",
+
   //make sure the mounted directory can be read properly
-  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude"
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude",
+
+  //Apply the firewall on every start, but only when INIT_FIREWALL is "true".
+  //The toggle is evaluated here (unprivileged, where containerEnv is visible)
+  //so we never depend on passing env through sudo.  If the firewall script
+  //fails, this command fails and container start reports it (fail-closed).
+  "postStartCommand": "/bin/bash -c 'if [ \"${INIT_FIREWALL:-true}\" = \"true\" ]; then echo \"[firewall] applying restricted egress policy\"; sudo bash ${containerWorkspaceFolder}/.devcontainer/init-firewall.sh; else echo \"[firewall] INIT_FIREWALL=${INIT_FIREWALL}, skipping\"; fi'",
+
+  //Wait for the firewall to finish before the container is marked ready.
+  "waitFor": "postStartCommand"
 }
