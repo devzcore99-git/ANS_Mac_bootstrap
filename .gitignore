@@ -62,3 +62,4 @@ $RECYCLE.BIN/
 *.log
 tmp/
 .tmp/
+.claude/skills/commit2repo
