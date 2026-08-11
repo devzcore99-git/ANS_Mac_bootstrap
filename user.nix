@@ -17,6 +17,6 @@
 # stale path here is worse than none.
 {
   username = "ahill";
-  hostname = "Austins-MacBook-Air";
+  hostname = "MacDev-01";
   flakeDir = null;
 }

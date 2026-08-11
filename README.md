@@ -123,6 +123,14 @@ destructive operation. `little-snitch` is a system extension that needs
 re-approval if it gets zapped. And `git add -A` stages your entire working tree
 into the index on each run, without showing what it staged.
 
+**File modes do not survive a clone.** Git tracks only the executable bit, so
+the read bits and every directory mode come from the umask of whoever checked
+the tree out. A `700` directory denies traversal to everything inside it, which
+is invisible while you are the owner and surfaces as `Permission denied` on some
+`.nix` file the moment the tree is read as another identity — a VM or container
+mounting this directory, or a build not running as you. The tree wants `644` on
+`.nix`, `755` on the `.sh` files and directories; `ls -la` is the check.
+
 **Machine identity is committed.** `user.nix` is tracked and must stay tracked
 (untracked files are invisible to flake evaluation), which means a second user's
 edits are a permanent local diff that conflicts on every pull.

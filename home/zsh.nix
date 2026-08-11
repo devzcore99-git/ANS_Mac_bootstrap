@@ -1,4 +1,4 @@
-{ pkgs, hostname, flakeDir, ... }:
+{ pkgs, lib, hostname, flakeDir, ... }:
 
 let
   # Build-time fallback only. Empty string = "not configured", which the
@@ -19,7 +19,12 @@ in
       cd = "z";
     };
 
-    initExtra = ''
+    # Was `initExtra`, which home-manager replaced with the ordered
+    # `initContent`. Order 1000 is where initExtra used to land — the same slot
+    # a bare assignment gets, stated explicitly so it survives home-manager
+    # adding its own definitions around it. (500 = mkBefore, 1500 = mkAfter.)
+    # This repo tracks home-manager master unpinned, so the old name is gone.
+    initContent = lib.mkOrder 1000 ''
       # Initialize zoxide
       eval "$(zoxide init zsh)"
 
