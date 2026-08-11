@@ -15,10 +15,45 @@
   //default; set INIT_FIREWALL to "false" in containerEnv below to disable.
   //These capabilities let init-firewall.sh program iptables/ipset.  They are
   //harmless when the firewall is off, so they always stay.
+  //
+  //host.docker.internal is what lets the container reach a local LLM running on
+  //the Docker host itself.  Docker Desktop on macOS provides the name
+  //automatically; Docker Engine on Linux does not, and needs this explicit
+  //host-gateway mapping.  It is a no-op where the name already resolves, so it
+  //is safe to set unconditionally and keeps one devcontainer.json working on
+  //both machines.  (Not needed when the model server is another box on the LAN
+  //— point OPENAI_BASE_URL straight at its IP — but harmless either way.)
+  //
+  //--env-file is how opencode's LLM settings get in.  ${localEnv:...} is NOT
+  //used for them on purpose: it resolves against the environment of whatever
+  //process launched the editor, and a VS Code started from Finder, the Dock or
+  //a .desktop launcher does not reliably inherit shell profile exports.  When
+  //that fails it fails silently — an empty OPENAI_BASE_URL falls back to the
+  //real api.openai.com, which is the last thing a local-only setup wants.  A
+  //file read at docker-run time has no such dependency, and works the same
+  //whether the container is started from VS Code or the CLI.
+  //
+  //${localEnv:HOME} is safe here where the custom vars are not: HOME is always
+  //set for GUI applications.  The file is host-level rather than per-project,
+  //so the endpoint is configured once per machine and every project inherits
+  //it, and no key ever lands in a repo.  initializeCommand below guarantees it
+  //exists — docker refuses to start at all if --env-file points at nothing.
+  //
+  //Note this is NOT a mount: the Docker CLI parses the file on the host and
+  //bakes the values into the container config, so the file never exists inside
+  //the container.  The flip side is that the values are fixed for the life of
+  //the container — editing llm.env needs a Rebuild Container, not a reopen.
   "runArgs": [
     "--cap-add=NET_ADMIN",
-    "--cap-add=NET_RAW"
+    "--cap-add=NET_RAW",
+    "--add-host=host.docker.internal:host-gateway",
+    "--env-file=${localEnv:HOME}/.config/devcontainer/llm.env"
   ],
+
+  //Runs on the HOST before the container is created.  Creates the env file on
+  //first use so a fresh machine boots instead of failing on a missing
+  //--env-file, and leaves an existing one untouched.
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env",
 
   //Mount Claude Configuration from guest container 1 time
   //Auth token will be stored in volume and shared with other Docker containers
@@ -28,9 +63,25 @@
   //brew install gh
   // gh auth login
   // gh auth setup-git
+  //
+  //Shared stock database (DBX_StockData) — uncomment both lines below for a
+  //project that reads it.  Mounted as a sibling of the repo, so a relative
+  //../DBX_StockData resolves inside the container exactly as it does on the
+  //host and no code has to know it is running in a container.
+  //Deliberately not readonly: both DBs are in WAL mode, and even a pure
+  //reader must be able to create the -shm file.  Set Docker Desktop file
+  //sharing to VirtioFS — WAL's shared memory fails over gRPC-FUSE.
+  //
+  //opencode is deliberately NOT given a mount.  Its state lives in a WAL-mode
+  //SQLite database (~/.local/share/opencode/opencode.db) that holds sessions
+  //and messages alongside credentials, so sharing it with the host would share
+  //far more than authorization.  The container gets its own, and authorization
+  //arrives as environment variables instead — see the --env-file in runArgs
+  //above and OPENCODE_CONFIG in containerEnv below.
   "mounts": [
     "source=claude-code-config,target=/home/vscode/.claude,type=volume",
-    "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly"
+    "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly",
+    //"source=${localWorkspaceFolder}/../DBX_StockData,target=/workspaces/DBX_StockData,type=bind"
   ],
 
   //have OAuth file stored in .claude instead of elsewhere
@@ -39,6 +90,34 @@
     //Restricted egress firewall toggle.  "true" (default) runs
     //init-firewall.sh on every start; set to "false" to boot with open egress.
     "INIT_FIREWALL": "true",
+
+    //opencode's LLM endpoint (OPENAI_BASE_URL / OPENAI_API_KEY) is deliberately
+    //NOT set here.  It comes from the host-level --env-file in runArgs above:
+    // ~/.config/devcontainer/llm.env
+    //Setting the pair here as well would defeat that — containerEnv is applied
+    //as explicit -e flags, which override --env-file, so an unset host variable
+    //would clobber the file's value with an empty string.
+
+    //opencode's config file.  Without this it would look for
+    //~/.config/opencode/opencode.json, which does not exist in a fresh
+    //container (opencode has no mount — see the note above "mounts"), leaving
+    //it with no provider and no default model.  Pointing OPENCODE_CONFIG at a
+    //file in the repo ships that configuration with the template instead, so a
+    //new project is usable the moment it opens.  An env var rather than a copy
+    //into ~/.config: editing the file takes effect on the next opencode run,
+    //with no Rebuild Container.
+    //
+    //.devcontainer/opencode.json declares a custom "local" provider on
+    //@ai-sdk/openai-compatible (bundled in the opencode binary — nothing is
+    //fetched from npm for it) rather than relying on the built-in openai
+    //provider, which assumes OpenAI's own model catalog.  Its baseURL and
+    //apiKey are "{env:OPENAI_BASE_URL}" / "{env:OPENAI_API_KEY}", substituted
+    //by opencode at load time from the --env-file values, so no endpoint or
+    //key is committed and one file works on every machine.  The model id is
+    //the one literal: it has to match what the server advertises.
+    "OPENCODE_CONFIG": "${containerWorkspaceFolder}/.devcontainer/opencode.json"
+
+    //"STOCKDATA_DIR": "/workspaces/DBX_StockData"
   },
 
   //Install the firewall's tooling once, at container-create time.  curl and
@@ -46,8 +125,17 @@
   //init-firewall.sh needs.  Re-runs on a rebuild.
   "onCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends iptables ipset dnsutils aggregate jq curl ca-certificates iproute2",
 
-  //make sure the mounted directory can be read properly
-  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude",
+  //Make sure the mounted directory can be read properly, then install opencode.
+  //opencode ships as an npm package that pulls a prebuilt binary for the
+  //platform from the registry, so it needs the node feature above and nothing
+  //else; `npm install -g` needs no sudo because the node feature owns the
+  //global prefix as vscode.  This runs at create time, before the firewall is
+  //applied by postStartCommand, and registry.npmjs.org is allow-listed anyway,
+  //so it works with the firewall on.
+  //
+  //Nothing to chown for opencode: it has no mount, so it creates its own state
+  //directory as vscode on first run.
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude && npm install -g opencode-ai@latest",
 
   //Apply the firewall on every start, but only when INIT_FIREWALL is "true".
   //The toggle is evaluated here (unprivileged, where containerEnv is visible)
