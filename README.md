@@ -48,8 +48,9 @@ machine — so an unedited run renames your Mac. `bootstrap.sh` and the `rebuild
 function both select the configuration by the hostname in `user.nix`, so it need
 not match `scutil --get LocalHostName` beforehand — but a bare
 `darwin-rebuild switch --flake <path>` does default to the live hostname and
-will fail until the two agree. `home/git.nix` also still carries a placeholder `userEmail =
-"you@example.com"`, which becomes the author of every commit until changed.
+will fail until the two agree. `home/git.nix` carries the git identity
+(`settings.user.name` / `settings.user.email`), which authors every commit made
+on the machine — change it if you are not Austin.
 
 ## Usage
 
