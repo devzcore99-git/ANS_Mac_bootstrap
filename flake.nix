@@ -20,6 +20,9 @@
       userConfig = import ./user.nix;
       username = userConfig.username;
       hostname = userConfig.hostname;
+      # Optional; null means the `rebuild` helper resolves the path at runtime.
+      # `or null` keeps clones whose user.nix predates the field evaluating.
+      flakeDir = userConfig.flakeDir or null;
     in {
     darwinConfigurations.${hostname} = nix-darwin.lib.darwinSystem {
       system = "aarch64-darwin";
@@ -30,6 +33,8 @@
         {
           home-manager.useGlobalPkgs = true;
           home-manager.useUserPackages = true;
+          # specialArgs does not reach home-manager modules; extraSpecialArgs does.
+          home-manager.extraSpecialArgs = { inherit username hostname flakeDir; };
           home-manager.users.${username} = import ./home;
         }
       ];

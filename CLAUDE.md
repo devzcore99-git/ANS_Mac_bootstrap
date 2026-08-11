@@ -24,8 +24,10 @@ and activates it.
   untracked files are invisible even when present on disk. This is why
   `user.nix` is committed rather than gitignored.
 - **Machine-specific**: `user.nix` (`username`, `hostname` — the hostname keys
-  the flake output *and* gets applied to the machine), the `rebuild` alias path
-  in `home/zsh.nix`, and the git identity in `home/git.nix` (`userEmail` is
+  the flake output *and* gets applied to the machine — plus optional `flakeDir`,
+  threaded to `home/zsh.nix` via `home-manager.extraSpecialArgs` as the last
+  fallback for the `rebuild` function, which otherwise resolves the clone from
+  `$FLAKE_DIR` or the cwd), and the git identity in `home/git.nix` (`userEmail` is
   still the `you@example.com` placeholder). `flake.nix` hardcodes
   `aarch64-darwin`.
 - **Re-run safety**: install steps are guarded and the activation is

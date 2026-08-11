@@ -44,9 +44,11 @@ or downloaded directory will not evaluate.
 **Before the first run on a new machine, edit `user.nix`.** It is committed with
 this machine's identity (`username = "ahill"`, `hostname =
 "Austins-MacBook-Air"`), and `hosts/macbook.nix` applies the hostname to the
-machine — so an unedited run renames your Mac. The hostname must match
-`scutil --get LocalHostName`, since `darwin-rebuild` selects the configuration by
-hostname. `home/git.nix` also still carries a placeholder `userEmail =
+machine — so an unedited run renames your Mac. `bootstrap.sh` and the `rebuild`
+function both select the configuration by the hostname in `user.nix`, so it need
+not match `scutil --get LocalHostName` beforehand — but a bare
+`darwin-rebuild switch --flake <path>` does default to the live hostname and
+will fail until the two agree. `home/git.nix` also still carries a placeholder `userEmail =
 "you@example.com"`, which becomes the author of every commit until changed.
 
 ## Usage
@@ -54,11 +56,23 @@ hostname. `home/git.nix` also still carries a placeholder `userEmail =
 After bootstrap, edit the `.nix` files and re-apply from a new shell:
 
 ```sh
-rebuild        # alias for: darwin-rebuild switch --flake ~/AI_Projects/ANS_Mac_bootstrap
+cd /wherever/ANS_Mac_bootstrap
+rebuild        # runs: darwin-rebuild switch --flake <resolved-dir>#<hostname>
 ```
 
-The alias (`home/zsh.nix`) hardcodes that path. If the clone lives elsewhere,
-use `darwin-rebuild switch --flake <path>` or fix the alias.
+`rebuild` is a zsh function (`home/zsh.nix`) that resolves the flake path when
+you call it, so the clone can live anywhere — an external volume included. It
+takes the first of:
+
+1. `$FLAKE_DIR`, if set — `FLAKE_DIR=/Volumes/SSD/ANS_Mac_bootstrap rebuild`
+2. the nearest ancestor of the current directory holding both `flake.nix` and
+   `user.nix` — so `cd`ing into the clone is enough
+3. `flakeDir` from `user.nix`, if you set it to an absolute path
+
+With none of the three it prints what to do and exits 1 rather than guessing.
+Any extra arguments go through to `darwin-rebuild` (`rebuild --show-trace`).
+The hostname from `user.nix` is passed explicitly, so the build no longer
+depends on the live hostname matching it.
 
 `bootstrap.sh` itself is only for prerequisites; the `.nix` files are the single
 source of truth. Nothing is generated — edit them directly.

@@ -87,10 +87,20 @@ if [ ! -f "$REPO_DIR/user.nix" ]; then
 {
   username = "$CURRENT_USER";
   hostname = "$CURRENT_HOSTNAME";
+  flakeDir = "$REPO_DIR";
 }
 EOF
 else
   echo "==> Using existing user.nix"
+fi
+
+# Warn (do not rewrite — the .nix files are hand-edited) when the fallback path
+# baked into the rebuild helper points somewhere other than this clone.
+CONFIGURED_DIR=$(sed -n 's/.*flakeDir *= *"\(.*\)".*/\1/p' "$REPO_DIR/user.nix")
+if [ -n "$CONFIGURED_DIR" ] && [ "$CONFIGURED_DIR" != "$REPO_DIR" ]; then
+  echo "!! user.nix sets flakeDir = \"$CONFIGURED_DIR\", but this clone is at" >&2
+  echo "!! $REPO_DIR. Run from inside the clone and 'rebuild' finds it anyway;" >&2
+  echo "!! from elsewhere it will target the stale path. Update or null it out." >&2
 fi
 
 # Read the hostname the flake is keyed on from user.nix, not from the live
