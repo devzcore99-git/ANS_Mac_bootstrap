@@ -23,6 +23,15 @@ and activates it.
 - **Everything must be git-tracked.** Flakes evaluate against the git tree;
   untracked files are invisible even when present on disk. This is why
   `user.nix` is committed rather than gitignored.
+- **File modes**: `.nix` files are `644`, the three `.sh` files are `755`, and
+  directories are `755`. Git only tracks the executable bit, so the read bits
+  and every directory mode come from each machine's umask and never travel
+  through a clone — a checkout made under a restrictive umask yields `700`
+  directories, and a `700` directory denies traversal to anything inside it no
+  matter how open the file itself looks. That is invisible locally and breaks
+  the moment the tree is read as another identity: a VM or devcontainer
+  mounting this directory, or a build not running as the owner. Re-check with
+  `ls -la` after any bulk copy; git will not fix it.
 - **Machine-specific**: `user.nix` (`username`, `hostname` — the hostname keys
   the flake output *and* gets applied to the machine — plus optional `flakeDir`,
   threaded to `home/zsh.nix` via `home-manager.extraSpecialArgs` as the last
