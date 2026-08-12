@@ -11,6 +11,10 @@
 # The allow-list is IPv4-only, so IPv6 is denied outright rather than left at
 # its default ACCEPT — see the ip6tables block below.
 #
+# DNS is allowed only to the container's own resolver, the private LAN, and
+# 1.1.1.1/8.8.8.8 — not to any destination — so port 53 is not left open as an
+# egress channel.
+#
 # Toggle lives in devcontainer.json (`INIT_FIREWALL`, default "true"); the
 # postStartCommand only invokes this script when the firewall is enabled.
 # Running this script directly ALWAYS applies the firewall, regardless of that
@@ -87,14 +91,51 @@ else
 fi
 
 # First allow DNS and localhost before any restrictions
-# Allow outbound DNS
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-# Allow inbound DNS responses
-iptables -A INPUT -p udp --sport 53 -j ACCEPT
-# Allow outbound SSH
-iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
-# Allow inbound SSH responses
-iptables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
+#
+# DNS is restricted to a fixed set of resolvers rather than allowed to any
+# destination: port 53 open to the whole internet is a working egress channel
+# through an attacker-controlled nameserver, which undercuts the point of an
+# allow-list. The set is the container's own resolver (read from resolv.conf,
+# since it is 127.0.0.11 under Docker's default bridge but the host resolver
+# under --network=host), the private LAN, and the two public resolvers below.
+#
+# TCP as well as UDP: resolvers fall back to TCP/53 for truncated answers, and
+# large or DNSSEC-signed responses are exactly the case that truncates. The
+# script's own dig calls do not hit this — they run before the policy flips to
+# DROP — so a UDP-only rule fails at runtime, looking like a flaky network.
+DNS_SRV=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf || true)
+if [ -z "$DNS_SRV" ]; then
+    echo "ERROR: No nameserver in /etc/resolv.conf; cannot scope the DNS rules"
+    exit 1
+fi
+echo "Container resolver detected as: $DNS_SRV"
+
+for dns in \
+    "$DNS_SRV" \
+    "192.168.0.0/16" \
+    "1.1.1.1" \
+    "8.8.8.8"; do
+    echo "Allowing DNS to $dns"
+    # Allow outbound DNS
+    iptables -A OUTPUT -p udp -d "$dns" --dport 53 -j ACCEPT
+    iptables -A OUTPUT -p tcp -d "$dns" --dport 53 -j ACCEPT
+    # Allow inbound DNS responses
+    iptables -A INPUT -p udp -s "$dns" --sport 53 -j ACCEPT
+    iptables -A INPUT -p tcp -s "$dns" --sport 53 -j ACCEPT
+done
+
+# No blanket port-22 rule here, deliberately.
+#
+# An unrestricted `-p tcp --dport 22 -j ACCEPT` is a tunnel straight out of a
+# default-DROP policy — `ssh -D`, `ssh -W`, `ssh host 'cat > exfil'` — and this
+# container mounts live Claude Code OAuth credentials at /home/vscode/.claude
+# and the host's GitHub token at /home/vscode/.config/gh.
+#
+# Nothing is lost by dropping it: SSH is governed by the same ipset as
+# everything else, and the ipset match below carries no port constraint, so
+# git-over-SSH to GitHub still works via the ranges from api.github.com/meta.
+# A non-GitHub SSH host goes in the static-networks loop, not back in here.
+
 # Allow localhost
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
@@ -170,6 +211,10 @@ done
 #
 # These are literal CIDRs rather than names, so unlike the domain loop they
 # involve no DNS and cannot fail a container boot.
+#
+# shellcheck disable=SC2043  # one-element list on purpose: this is the seam
+# projects extend, and the loop keeps the CIDR validation applying to every
+# entry added later.
 for cidr in \
     "192.168.12.0/24"; do
     if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
@@ -224,6 +269,37 @@ if [ -d /proc/sys/net/ipv6 ] && command -v ip6tables >/dev/null 2>&1; then
         fi
     done
     echo "Firewall verification passed - all IPv6 chains default to DROP"
+fi
+
+# Confirm DNS is scoped: an allowed resolver answers, an unlisted one does not.
+# 9.9.9.9 (Quad9) is the probe purely because it is a well-known resolver that
+# is deliberately absent from the list above.
+if ! dig +time=5 +tries=1 @1.1.1.1 example.com >/dev/null 2>&1; then
+    echo "ERROR: Firewall verification failed - allowed resolver 1.1.1.1 is unreachable"
+    exit 1
+else
+    echo "Firewall verification passed - allowed resolver 1.1.1.1 is reachable"
+fi
+
+if dig +time=5 +tries=1 @9.9.9.9 example.com >/dev/null 2>&1; then
+    echo "ERROR: Firewall verification failed - unlisted resolver 9.9.9.9 answered"
+    exit 1
+else
+    echo "Firewall verification passed - unlisted resolver 9.9.9.9 is blocked as expected"
+fi
+
+# Confirm SSH is governed by the allow-list rather than open on port 22.
+# gitlab.com is the probe because it definitely listens on 22 and is definitely
+# not in the ipset, so a success here means the policy is broken — this can only
+# fail the boot when the firewall is actually wrong, never when SSH is merely
+# unreachable. The positive case (git-over-SSH to GitHub still working) is left
+# as a manual check, `ssh -T git@github.com`, so container start does not gain a
+# dependency on port 22 being reachable at all.
+if timeout 5 bash -c 'exec 3<>/dev/tcp/gitlab.com/22' >/dev/null 2>&1; then
+    echo "ERROR: Firewall verification failed - reached gitlab.com:22, SSH is not allow-listed"
+    exit 1
+else
+    echo "Firewall verification passed - SSH to a non-allow-listed host is blocked"
 fi
 
 if curl --connect-timeout 5 https://example.com >/dev/null 2>&1; then

@@ -53,7 +53,22 @@
   //Runs on the HOST before the container is created.  Creates the env file on
   //first use so a fresh machine boots instead of failing on a missing
   //--env-file, and leaves an existing one untouched.
-  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env",
+  //
+  //It creates the file EMPTY, on purpose — nothing here should guess at a
+  //machine's model endpoint.  The consequence to know: on a fresh machine the
+  //container boots clean, OPENAI_BASE_URL and OPENAI_API_KEY are unset, and
+  //opencode's {env:...} substitution in opencode.json yields an empty baseURL,
+  //so the first request fails with a message about the URL rather than about
+  //the missing file.  That is expected; fill in llm.env (see README) and
+  //Rebuild Container.
+  //It also creates ~/.config/gh, for the readonly bind further down.  Docker
+  //does not fail on a missing bind source — it CREATES it, owned by root on
+  //Docker Engine — so on a machine where gh was never installed you would
+  //otherwise end up with a stray root-owned directory on the host and a
+  //container whose credential helper silently has nothing to read.  Creating it
+  //here turns that into an empty-but-correct mount, and leaves a real gh config
+  //untouched.
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env && mkdir -p ${localEnv:HOME}/.config/gh",
 
   //Mount Claude Configuration from guest container 1 time
   //Auth token will be stored in volume and shared with other Docker containers
@@ -135,7 +150,29 @@
   //
   //Nothing to chown for opencode: it has no mount, so it creates its own state
   //directory as vscode on first run.
-  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude && npm install -g opencode-ai@latest",
+  //
+  //npm is reached through an explicit PATH rather than the one the node feature
+  //bakes into the image as ENV.  Some runners (DevPod) execute lifecycle hooks
+  //through a switch to the remote user, and PAM resets PATH to the login.defs
+  //default, dropping /usr/local/share/nvm/current/bin.  nvm's entry is put back
+  //only by /etc/bash.bashrc, which a non-interactive `bash -c` never sources
+  //(/etc/profile.d/00-restore-env.sh is a literal `export PATH=$PATH`, so a
+  //login shell does not help either) — the hook then fails with
+  //"npm: command not found" even though node is installed and working.  VS
+  //Code's Dev Containers extension keeps the image env and never hits this, so
+  //the export is free there.  The global prefix is still the vscode-owned nvm
+  //directory, so this stays sudo-free.
+  //
+  //The version is PINNED, not @latest.  Everything else here is nailed to a
+  //digest in devcontainer-lock.json, and @latest resolved fresh on every create
+  //made this the one unreproducible part of the build — two developers
+  //rebuilding on different days got different opencode versions with no record
+  //of which.  It is also the one unreviewed supply-chain path into a container
+  //that mounts live Claude Code credentials and the host's GitHub token.
+  //Bumping it is a deliberate edit to this repo, the same as re-locking a
+  //feature.  (Not the same question as the base image's moving :ubuntu tag,
+  //which is an OS floor patched by Microsoft.)
+  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && npm install -g opencode-ai@1.18.16'",
 
   //Apply the firewall on every start, but only when INIT_FIREWALL is "true".
   //The toggle is evaluated here (unprivileged, where containerEnv is visible)
