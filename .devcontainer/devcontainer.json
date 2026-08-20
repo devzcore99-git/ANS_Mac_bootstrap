@@ -172,7 +172,33 @@
   //Bumping it is a deliberate edit to this repo, the same as re-locking a
   //feature.  (Not the same question as the base image's moving :ubuntu tag,
   //which is an OS floor patched by Microsoft.)
-  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && npm install -g opencode-ai@1.18.16'",
+  //
+  //The install is NOT on the chown's && chain.  An npm registry hiccup, an
+  //outage, or a yanked version would otherwise fail postCreateCommand, which
+  //fails the container create — for a tool most projects in this workspace do
+  //not use.  Wrapped in a group with `|| echo` instead, so the degraded state
+  //is "no opencode", said out loud in the create log, rather than "no
+  //container".  The chown keeps its && and stays fatal: it governs the mounted
+  //Claude Code credentials, and a container whose credentials are unreadable
+  //is broken in a way worth stopping for.
+  //herdr is installed last, by .devcontainer/install-herdr.sh.  It is a script
+  //rather than another clause here because it has real logic — pick the asset
+  //for the container's architecture, verify a SHA-256, then install the Claude
+  //Code and opencode integrations — and check.sh can lint a script but not a
+  //JSON string.  See the header of that file for why the vendor's
+  //`curl https://herdr.dev/install.sh | sh` is not used: it has no version
+  //knob, and this container holds live credentials.
+  //
+  //Like opencode it is NOT on the fatal chain — `|| echo` keeps a GitHub
+  //outage costing the container herdr rather than the whole create — and like
+  //opencode it runs before postStartCommand raises the firewall, which is the
+  //only moment the download needs.  The integrations themselves are offline:
+  //their payloads ship inside the herdr binary.
+  //
+  //It runs AFTER the chown above on purpose.  The Claude Code integration
+  //writes into /home/vscode/.claude, the mounted credentials volume, which is
+  //only writable as vscode once that chown has run.
+  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; }'",
 
   //Apply the firewall on every start, but only when INIT_FIREWALL is "true".
   //The toggle is evaluated here (unprivileged, where containerEnv is visible)
