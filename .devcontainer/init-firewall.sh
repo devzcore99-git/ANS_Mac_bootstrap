@@ -41,6 +41,38 @@ iptables -t nat -F
 iptables -t nat -X
 iptables -t mangle -F
 iptables -t mangle -X
+
+# Reset the chain policies too. `-F` deletes rules; the policy of a built-in
+# chain is a separate attribute that only `-P` changes, so without these three
+# lines the flush above is only half a reset.
+#
+# On a first boot that is invisible — the chains are in a fresh network
+# namespace at the kernel default of ACCEPT. On a re-run inside a container that
+# already has this firewall, `-P OUTPUT DROP` from line ~245 of the previous run
+# survives the flush that just deleted every ACCEPT rule, and the container has
+# a default-deny policy with no exceptions from here on. The GitHub fetch below
+# then hangs on a black-holed SYN (the fast-fail REJECT was flushed too) and the
+# script exits, leaving no egress at all.
+#
+# That is not a hypothetical path: it is the documented one. The header above
+# calls a direct run "the intended way to (re)apply it by hand", and README's
+# firewall section names it as the fix for a stale allow-list. It also fires
+# whenever postStartCommand runs against a container that is already up, e.g.
+# reopening the folder without stopping it. (A full stop/start gets a new
+# network namespace and so starts clean.)
+#
+# Resetting to ACCEPT restores exactly the state a first boot finds, which makes
+# the run idempotent. It does leave egress unrestricted between here and the
+# `-P ... DROP` below — the same window that already exists between container
+# start and postStartCommand. Closing that too means building the ruleset in a
+# temp file and applying it with a single atomic `iptables-restore`.
+#
+# The ip6tables block further down does not need this: it re-asserts its
+# policies unconditionally after flushing, so it already converges on a re-run.
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
 ipset destroy allowed-domains 2>/dev/null || true
 
 # 2. Selectively restore ONLY internal Docker DNS resolution
@@ -145,7 +177,12 @@ ipset create allowed-domains hash:net
 
 # Fetch GitHub meta information and aggregate + add their IP ranges
 echo "Fetching GitHub IP ranges..."
-gh_ranges=$(curl -s https://api.github.com/meta)
+# `|| true` so the guard below is reachable. Under `set -e` an assignment takes
+# the exit status of its command substitution, so a failing curl kills the
+# script here and the error message never prints — on a fail-closed boot path
+# that is a container refusing to start with no reason given. Same idiom as
+# lines 35 and 106, and repeated at the two substitutions further down.
+gh_ranges=$(curl -s https://api.github.com/meta || true)
 if [ -z "$gh_ranges" ]; then
     echo "ERROR: Failed to fetch GitHub IP ranges"
     exit 1
@@ -171,20 +208,41 @@ done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 # Resolve and add other allowed domains
 #
 # npm + PyPI cover the Node and Python features this template ships on by
-# default; api.anthropic.com is Claude Code; the rest are VS Code Server and
-# telemetry. Add a line here for any host a project legitimately needs.
+# default; api.anthropic.com is Claude Code; the Ubuntu archives keep apt-get
+# working; the rest are VS Code Server and telemetry. Add a line here for any
+# host a project legitimately needs.
+#
+# The three ubuntu.com hosts are what make `sudo apt-get install` work in a
+# running container. Without them apt only works before the firewall comes up
+# (onCreateCommand), and every later install hangs on the connect — which reads
+# as a broken mirror rather than as the policy doing its job, on a base image
+# whose whole point is that projects add what they need. archive/security cover
+# amd64; ports.ubuntu.com is the arm64 archive, so on Apple Silicon that is the
+# one actually used. All three are listed because the template runs on both.
+#
+# Caveat worth knowing: these are round-robin mirror pools with more addresses
+# than one A lookup returns, so the boot-time snapshot can miss the host apt
+# later picks. That is the same staleness the whole domain loop has; the answer
+# is the same, re-run this script. And each name added here is another
+# resolution that can fail a boot, since the loop is fail-closed.
 for domain in \
     "registry.npmjs.org" \
     "pypi.org" \
     "files.pythonhosted.org" \
     "api.anthropic.com" \
+    "archive.ubuntu.com" \
+    "security.ubuntu.com" \
+    "ports.ubuntu.com" \
     "sentry.io" \
     "statsig.com" \
     "marketplace.visualstudio.com" \
     "vscode.blob.core.windows.net" \
     "update.code.visualstudio.com"; do
     echo "Resolving $domain..."
-    ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}')
+    # `|| true` on the pipeline: dig exits 9 when no server replies, and
+    # pipefail would propagate it before the guard runs — losing the one message
+    # that says *which* domain stalled. The -z test already covers the result.
+    ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}' || true)
     if [ -z "$ips" ]; then
         echo "ERROR: Failed to resolve $domain"
         exit 1
@@ -226,7 +284,9 @@ for cidr in \
 done
 
 # Get host IP from default route
-HOST_IP=$(ip route | grep default | cut -d" " -f3)
+# `|| true`: grep exits 1 when there is no default route at all, which pipefail
+# turns into a silent abort instead of the message below.
+HOST_IP=$(ip route | grep default | cut -d" " -f3 || true)
 if [ -z "$HOST_IP" ]; then
     echo "ERROR: Failed to detect host IP"
     exit 1
