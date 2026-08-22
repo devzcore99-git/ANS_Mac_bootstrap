@@ -1,0 +1,67 @@
+{
+  "skill_name": "build-loop",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Build out CODE_StockNewsPuller from plans/stock-news-puller-PRD.md. Keep going until the tests pass.",
+      "expected_output": "Enters a worktree, reads the PRD, establishes a test command, writes a task plan whose entries each cite a PRD section, runs buildloop.py init, then loops build/test/fix dispatching one subagent per task. Stops before merging and asks.",
+      "files": [],
+      "assertions": [
+        "Creates a git worktree before writing code",
+        "Runs the existing test suite once before dispatching any build agent",
+        "Every task in the plan JSON has a non-empty acceptance string naming a runnable check",
+        "Runs the full test command itself after subagents return, not only the agents' own reports",
+        "Does not merge to master or push without asking"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "implement the whole thing in CODE_PingWidget for me, spin up agents per task and dont stop to ask me every time something breaks",
+      "expected_output": "No PRD exists, so it writes a short spec to .buildloop/spec.md from the request, shows it, and proceeds. Iterates on failures without asking, up to 5 attempts per task, then stops.",
+      "files": [],
+      "assertions": [
+        "Writes a spec file rather than blocking on the absence of a PRD",
+        "Does not ask the user after an individual test failure",
+        "Stops and reports when a task reaches 5 failed attempts",
+        "Commits each passing task separately on the worktree branch"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Run the build loop on CODE_Youtube_Rater — it has no tests directory at all.",
+      "expected_output": "Recognizes there is no verification gate, makes creating one the first task in the plan (add pytest to the manifest, create tests/), and only then builds features against it.",
+      "files": [],
+      "assertions": [
+        "Task T1 establishes the test runner rather than implementing a feature",
+        "--test-command passed to init is a command that exists after T1 lands",
+        "Does not declare the build complete on a project where the test command was never run successfully"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "The build loop on CODE_Thing stopped with T4 blocked after 5 tries. What now?",
+      "expected_output": "Reads state with `status`, reports T4's last_failure and what was attempted, and asks how to proceed. Does not silently start a sixth attempt or re-init the run.",
+      "files": [],
+      "assertions": [
+        "Does not retry the blocked task without the user saying so",
+        "Does not run `init --force`, which would discard attempt history",
+        "Surfaces the stored last_failure text"
+      ]
+    }
+  ],
+  "trigger_queries": [
+    { "query": "Build out the PRD in plans/stock-news-puller-PRD.md until it works", "should_trigger": true },
+    { "query": "implement this project autonomously and fix the errors as they come up", "should_trigger": true },
+    { "query": "plan it, build it, test it, and keep looping until the whole thing is done", "should_trigger": true },
+    { "query": "spin up agents to build each piece of this backlog and verify each one", "should_trigger": true },
+    { "query": "work through the feature list on CODE_PingWidget until the suite is green", "should_trigger": true },
+    { "query": "take this spec and turn it into working tested code", "should_trigger": true },
+    { "query": "write me a PRD for a stock scanner", "should_trigger": false },
+    { "query": "commit and push this repo", "should_trigger": false },
+    { "query": "fix the IndexError in parse.py", "should_trigger": false },
+    { "query": "run the tests and tell me what fails", "should_trigger": false },
+    { "query": "check every 5 minutes whether the build finished", "should_trigger": false },
+    { "query": "review this project and tell me what I should improve", "should_trigger": false },
+    { "query": "scaffold a new project directory called CODE_Widget", "should_trigger": false }
+  ]
+}
