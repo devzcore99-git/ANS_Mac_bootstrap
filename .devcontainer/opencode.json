@@ -9,6 +9,13 @@
         "apiKey": "{env:OPENAI_API_KEY}"
       },
       "models": {
+        "qwen/qwen3.6-35b-a3b": {
+          "name": "qwen/qwen3.6-35b-a3b",
+          "limit": {
+            "context": 128000,
+            "output": 32768
+          }
+        },
         "qwen/qwen3.5-9b": {
           "name": "qwen/qwen3.5-9b",
           "limit": {
@@ -19,5 +26,5 @@
       }
     }
   },
-  "model": "local/qwen/qwen3.5-9b"
+  "model": "local/qwen/qwen3.6-35b-a3b"
 }
