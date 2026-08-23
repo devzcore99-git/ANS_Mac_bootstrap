@@ -10,8 +10,21 @@
 # this file, versioned with the file itself, instead of an edit somewhere else
 # that has to be kept in sync.
 #
-# One filename per line; `#` starts a comment; blank lines are ignored.
-# Entries are plain filenames in this directory, not paths.
+# Two sections. Entries before any header are FILES in this directory - plain
+# filenames, not paths. Entries after `[keys]` are top-level KEYS in
+# devcontainer.json. `#` starts a comment; blank lines are ignored.
+#
+# A key cannot be a file: the devcontainer CLI reads devcontainer.json to build
+# the `docker run` command, before any script in this directory exists to run,
+# so `mounts` and `containerEnv` have nowhere else to live. A refresh therefore
+# takes the template's devcontainer.json and splices the project's value for
+# each listed key back into it. That is not a new idea here - `name` has always
+# been preserved this way; the list just makes it general.
+#
+# The cost of listing a key: the project's value is frozen. A later improvement
+# to the template's own `containerEnv` will not reach a project, exactly as a
+# later improvement to firewall-allow.txt would not. Only list a key projects
+# genuinely differ on.
 #
 # The bar for adding one: a file a project is EXPECTED to edit. Everything
 # else, including anything a project merely might edit in a pinch, stays
@@ -34,3 +47,33 @@ packages.txt
 # one create-time step the template has no opinion about, so it is never
 # overwritten.
 setup.sh
+
+[keys]
+
+# The project's own name. Preserved on every refresh and rewritten immediately
+# when devcontainer.json is replaced - without this, every project would read as
+# permanently drifted from the template and a refresh would be meaningless.
+name
+
+# Bind mounts and volumes. The one thing a project reliably needs that has no
+# runtime seam: mounts are consumed by the devcontainer CLI before any of this
+# directory's scripts run, so there is no file for them to be read from.
+#
+# Two things to get right when adding one:
+#   - A bind whose host source does not exist is NOT an error. Docker creates it
+#     as a root-owned empty directory, and the symptom is an empty mount rather
+#     than a failed start. `initializeCommand` runs on the host and is where a
+#     missing source gets created - that is why it touches llm.env today.
+#   - `${localWorkspaceFolder}` and `${localEnv:VAR}` both substitute here. Use
+#     them rather than an absolute path: this workspace is used from two
+#     machines whose home directories differ.
+mounts
+
+# Per-project environment variables. Same latent need as mounts - the template
+# ships a commented-out STOCKDATA_DIR here for exactly this reason.
+#
+# Note what a project inherits by listing this: CLAUDE_CONFIG_DIR, the
+# INIT_FIREWALL toggle and OPENCODE_CONFIG all live in this block, and they
+# freeze at whatever the project has today. Keep them; a project adding a
+# variable should add to the block, never replace it.
+containerEnv
