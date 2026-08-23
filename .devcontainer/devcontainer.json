@@ -68,7 +68,7 @@
   //container whose credential helper silently has nothing to read.  Creating it
   //here turns that into an empty-but-correct mount, and leaves a real gh config
   //untouched.
-  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env && mkdir -p ${localEnv:HOME}/.config/gh",
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env ${localEnv:HOME}/.config/devcontainer/opencode.json && mkdir -p ${localEnv:HOME}/.config/gh",
 
   //Mount Claude Configuration from guest container 1 time
   //Auth token will be stored in volume and shared with other Docker containers
@@ -96,6 +96,12 @@
   "mounts": [
     "source=claude-code-config,target=/home/vscode/.claude,type=volume",
     "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly",
+    //This template's own host-level config directory: llm.env plus the
+    //optional opencode.json override (see OPENCODE_CONFIG below).  NOT
+    //opencode's own ~/.config/opencode, which is a package root whose
+    //node_modules and plugins/*.js would run in here.  The directory is
+    //bound rather than the files, so an editor that saves by rename lands.
+    "source=${localEnv:HOME}/.config/devcontainer,target=/home/vscode/.config/devcontainer,type=bind,readonly",
     //"source=${localWorkspaceFolder}/../DBX_StockData,target=/workspaces/DBX_StockData,type=bind"
   ],
 
@@ -130,7 +136,7 @@
     //by opencode at load time from the --env-file values, so no endpoint or
     //key is committed and one file works on every machine.  The model id is
     //the one literal: it has to match what the server advertises.
-    "OPENCODE_CONFIG": "${containerWorkspaceFolder}/.devcontainer/opencode.json"
+    "OPENCODE_CONFIG": "/home/vscode/.opencode-config.json"
 
     //"STOCKDATA_DIR": "/workspaces/DBX_StockData"
   },
@@ -204,7 +210,13 @@
   //The toggle is evaluated here (unprivileged, where containerEnv is visible)
   //so we never depend on passing env through sudo.  If the firewall script
   //fails, this command fails and container start reports it (fail-closed).
-  "postStartCommand": "/bin/bash -c 'if [ \"${INIT_FIREWALL:-true}\" = \"true\" ]; then echo \"[firewall] applying restricted egress policy\"; sudo bash ${containerWorkspaceFolder}/.devcontainer/init-firewall.sh; else echo \"[firewall] INIT_FIREWALL=${INIT_FIREWALL}, skipping\"; fi'",
+  //Before the firewall: point OPENCODE_CONFIG's symlink at the host override
+  //(~/.config/devcontainer/opencode.json) when that file has content, and at
+  //this project's .devcontainer/opencode.json otherwise.  Re-evaluated every
+  //start.  Non-fatal on purpose — a failure costs opencode its provider, not
+  //the container — and it runs first so it cannot swallow the firewall's exit
+  //status.
+  "postStartCommand": "/bin/bash -c 'if [ -s /home/vscode/.config/devcontainer/opencode.json ]; then OC=/home/vscode/.config/devcontainer/opencode.json; else OC=${containerWorkspaceFolder}/.devcontainer/opencode.json; fi; if ln -sfn \"$OC\" /home/vscode/.opencode-config.json; then echo \"[opencode] config: $OC\"; else echo \"[opencode] WARNING: could not link $OC; opencode will start with no provider\"; fi; if [ \"${INIT_FIREWALL:-true}\" = \"true\" ]; then echo \"[firewall] applying restricted egress policy\"; sudo bash ${containerWorkspaceFolder}/.devcontainer/init-firewall.sh; else echo \"[firewall] INIT_FIREWALL=${INIT_FIREWALL}, skipping\"; fi'",
 
   //Wait for the firewall to finish before the container is marked ready.
   "waitFor": "postStartCommand"
