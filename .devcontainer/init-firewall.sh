@@ -2,11 +2,21 @@
 #
 # Default-DROP egress firewall for the dev container.
 #
-# Builds an ipset allow-list from GitHub's published IP ranges, a fixed set of
-# domains the toolchain needs (npm, PyPI, the Anthropic API, VS Code, and
-# telemetry), and a static list of LAN CIDRs (the local LLM), sets the default
-# OUTPUT policy to DROP, then verifies that a disallowed host is blocked and an
-# allowed one is reachable.
+# Builds an ipset allow-list from GitHub's published IP ranges plus two text
+# files beside this script, sets the default OUTPUT policy to DROP, then
+# verifies that a disallowed host is blocked and an allowed one is reachable.
+#
+# This script carries NO host names. They live in:
+#
+#   firewall-allow.base.txt   the template's own set (npm, PyPI, the Anthropic
+#                             API, the Ubuntu archives, VS Code, the LAN the
+#                             local LLM is on). Boilerplate. Fail-closed.
+#   firewall-allow.txt        this project's additions. The only file here a
+#                             project edits. Best-effort: a bad entry warns
+#                             rather than blocking the boot.
+#
+# So a project that needs another host adds a line to a text file, and this
+# script stays byte-identical everywhere and can be refreshed without a merge.
 #
 # The allow-list is IPv4-only, so IPv6 is denied outright rather than left at
 # its default ACCEPT — see the ip6tables block below.
@@ -166,7 +176,7 @@ done
 # Nothing is lost by dropping it: SSH is governed by the same ipset as
 # everything else, and the ipset match below carries no port constraint, so
 # git-over-SSH to GitHub still works via the ranges from api.github.com/meta.
-# A non-GitHub SSH host goes in the static-networks loop, not back in here.
+# A non-GitHub SSH host goes in an allow-list file, not back in here.
 
 # Allow localhost
 iptables -A INPUT -i lo -j ACCEPT
@@ -205,83 +215,135 @@ while read -r cidr; do
     ipset add allowed-domains "$cidr" -exist
 done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 
-# Resolve and add other allowed domains
+# Resolve and add the allow-list files
 #
-# npm + PyPI cover the Node and Python features this template ships on by
-# default; api.anthropic.com is Claude Code; the Ubuntu archives keep apt-get
-# working; the rest are VS Code Server and telemetry. Add a line here for any
-# host a project legitimately needs.
+# Two files, both in this directory, read in this order:
 #
-# The three ubuntu.com hosts are what make `sudo apt-get install` work in a
-# running container. Without them apt only works before the firewall comes up
-# (onCreateCommand), and every later install hangs on the connect — which reads
-# as a broken mirror rather than as the policy doing its job, on a base image
-# whose whole point is that projects add what they need. archive/security cover
-# amd64; ports.ubuntu.com is the arm64 archive, so on Apple Silicon that is the
-# one actually used. All three are listed because the template runs on both.
+#   firewall-allow.base.txt  the template's own set - npm, PyPI, the Anthropic
+#                            API, the Ubuntu archives, VS Code, the LAN segment
+#                            the local LLM is on. Boilerplate; refreshed from
+#                            DEV-TEMPLATE. FAIL-CLOSED: a bad or unresolvable
+#                            entry aborts the boot, because a container without
+#                            npm or the Anthropic API has not usefully started.
 #
-# Caveat worth knowing: these are round-robin mirror pools with more addresses
-# than one A lookup returns, so the boot-time snapshot can miss the host apt
-# later picks. That is the same staleness the whole domain loop has; the answer
-# is the same, re-run this script. And each name added here is another
-# resolution that can fail a boot, since the loop is fail-closed.
-for domain in \
-    "registry.npmjs.org" \
-    "pypi.org" \
-    "files.pythonhosted.org" \
-    "api.anthropic.com" \
-    "archive.ubuntu.com" \
-    "security.ubuntu.com" \
-    "ports.ubuntu.com" \
-    "sentry.io" \
-    "statsig.com" \
-    "marketplace.visualstudio.com" \
-    "vscode.blob.core.windows.net" \
-    "update.code.visualstudio.com"; do
-    echo "Resolving $domain..."
-    # `|| true` on the pipeline: dig exits 9 when no server replies, and
-    # pipefail would propagate it before the guard runs — losing the one message
-    # that says *which* domain stalled. The -z test already covers the result.
-    ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}' || true)
-    if [ -z "$ips" ]; then
-        echo "ERROR: Failed to resolve $domain"
+#   firewall-allow.txt       what THIS project needs on top. The only file in
+#                            .devcontainer/ a project is meant to edit, and the
+#                            reason the script itself carries no host names.
+#                            BEST-EFFORT: a bad or unresolvable entry warns,
+#                            naming file and line, and the boot continues with
+#                            that host blocked. Optional - absent is normal.
+#
+# The split is the whole point. A project extends the firewall by adding a line
+# to a text file, never by editing this script, so this script stays identical
+# across every project and can be refreshed without a merge.
+#
+# Format (both files): one entry per line, a domain name, a bare IPv4 address,
+# or an IPv4 CIDR; `#` starts a comment to end of line; blank lines ignored.
+ALLOW_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+BASE_ALLOW_FILE="$ALLOW_DIR/firewall-allow.base.txt"
+PROJECT_ALLOW_FILE="$ALLOW_DIR/firewall-allow.txt"
+
+# Anchored and complete, because these decide what a root script feeds to ipset
+# and dig. A label is 1-63 of [A-Za-z0-9-] not starting or ending with a hyphen;
+# at least one dot is required, so a bare word cannot be mistaken for a host.
+HOSTNAME_RE='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'
+IPV4_RE='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'
+CIDR_RE='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$'
+
+ALLOW_WARNINGS=0
+
+# Report a bad entry: fatal in a strict (base) file, a warning in a project one.
+allow_problem() {
+    local strict="$1" label="$2" lineno="$3" message="$4"
+    if [ "$strict" = "true" ]; then
+        echo "ERROR: $message"
+        echo "       $label line $lineno"
         exit 1
+    fi
+    echo "WARNING: $message"
+    echo "         $label line $lineno"
+    echo "         continuing; traffic to it will be BLOCKED"
+    ALLOW_WARNINGS=$((ALLOW_WARNINGS + 1))
+}
+
+# Add one entry to the ipset. A literal address or CIDR goes straight in; a
+# domain is resolved first and every A record is added.
+allow_entry() {
+    local entry="$1" strict="$2" label="$3" lineno="$4"
+    local ips ip
+
+    if [[ "$entry" =~ $CIDR_RE ]] || [[ "$entry" =~ $IPV4_RE ]]; then
+        echo "Adding $entry"
+        # -exist: re-adding an already-present element is a no-op instead of a
+        # non-zero exit (would otherwise kill the script under `set -e`).
+        ipset add allowed-domains "$entry" -exist
+        return 0
+    fi
+
+    if [[ ! "$entry" =~ $HOSTNAME_RE ]]; then
+        allow_problem "$strict" "$label" "$lineno" \
+            "not a domain name, IPv4 address, or IPv4 CIDR: '$entry'"
+        return 0
+    fi
+
+    echo "Resolving $entry..."
+    # `|| true` on the pipeline: dig exits 9 when no server replies, and
+    # pipefail would propagate it before the guard runs - losing the one message
+    # that says *which* domain stalled. The -z test already covers the result.
+    ips=$(dig +noall +answer A "$entry" | awk '$4 == "A" {print $5}' || true)
+    if [ -z "$ips" ]; then
+        allow_problem "$strict" "$label" "$lineno" "failed to resolve '$entry'"
+        return 0
     fi
 
     while read -r ip; do
-        if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-            echo "ERROR: Invalid IP from DNS for $domain: $ip"
-            exit 1
+        if [[ ! "$ip" =~ $IPV4_RE ]]; then
+            allow_problem "$strict" "$label" "$lineno" \
+                "invalid IP from DNS for '$entry': $ip"
+            continue
         fi
-        echo "Adding $ip for $domain"
+        echo "Adding $ip for $entry"
         # -exist: domains behind a shared CDN (Fastly, Cloudflare) resolve to
         # overlapping IPs; without this, the second add fails and aborts.
         ipset add allowed-domains "$ip" -exist
     done < <(echo "$ips")
-done
+}
 
-# Static networks to allow, in addition to the resolved domains above.
-#
-# 192.168.12.0/24 is the LAN segment the local LLM lives on — the endpoint
-# opencode is pointed at via OPENAI_BASE_URL in devcontainer.json. It is not
-# reachable through HOST_NETWORK below: that is derived from the default route,
-# which inside the container is the Docker bridge gateway (172.x), not the LAN.
-#
-# These are literal CIDRs rather than names, so unlike the domain loop they
-# involve no DNS and cannot fail a container boot.
-#
-# shellcheck disable=SC2043  # one-element list on purpose: this is the seam
-# projects extend, and the loop keeps the CIDR validation applying to every
-# entry added later.
-for cidr in \
-    "192.168.12.0/24"; do
-    if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-        echo "ERROR: Invalid static CIDR: $cidr"
-        exit 1
-    fi
-    echo "Adding static network $cidr"
-    ipset add allowed-domains "$cidr" -exist
-done
+# Read one allow-list file. `|| [ -n "$line" ]` so a final line with no trailing
+# newline is still processed rather than silently dropped - the single likeliest
+# way a hand-edited entry goes missing without any error.
+read_allow_file() {
+    local file="$1" strict="$2"
+    local label lineno=0 line entry
+    label=$(basename "$file")
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        lineno=$((lineno + 1))
+        entry="${line%%#*}"                              # strip comment
+        entry="${entry#"${entry%%[![:space:]]*}"}"       # trim leading space
+        entry="${entry%"${entry##*[![:space:]]}"}"       # trim trailing space
+        [ -z "$entry" ] && continue
+        allow_entry "$entry" "$strict" "$label" "$lineno"
+    done < "$file"
+}
+
+if [ ! -f "$BASE_ALLOW_FILE" ]; then
+    echo "ERROR: Missing $BASE_ALLOW_FILE"
+    echo "       This file carries the template's own allow-list; without it the"
+    echo "       container would start with only GitHub reachable. Restore it from"
+    echo "       DEV-TEMPLATE rather than booting with INIT_FIREWALL=false."
+    exit 1
+fi
+
+echo "Reading template allow-list: $BASE_ALLOW_FILE"
+read_allow_file "$BASE_ALLOW_FILE" true
+
+if [ -f "$PROJECT_ALLOW_FILE" ]; then
+    echo "Reading project allow-list: $PROJECT_ALLOW_FILE"
+    read_allow_file "$PROJECT_ALLOW_FILE" false
+else
+    echo "No project allow-list at $PROJECT_ALLOW_FILE - template set only"
+fi
 
 # Get host IP from default route
 # `|| true`: grep exits 1 when there is no default route at all, which pipefail
@@ -314,7 +376,13 @@ iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 # Explicitly REJECT all other outbound traffic for immediate feedback
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 
-echo "Firewall configuration complete"
+if [ "$ALLOW_WARNINGS" -gt 0 ]; then
+    echo "Firewall configuration complete with $ALLOW_WARNINGS allow-list warning(s)"
+    echo "  Those entries were SKIPPED and their traffic is blocked. Scroll up for"
+    echo "  the file and line of each, fix them, then re-run this script."
+else
+    echo "Firewall configuration complete"
+fi
 echo "Verifying firewall rules..."
 
 # Confirm the IPv6 stack really is denied. Captured into a variable rather than

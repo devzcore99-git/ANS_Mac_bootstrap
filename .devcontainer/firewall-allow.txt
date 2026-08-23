@@ -1,0 +1,39 @@
+# Project allow-list — extra hosts and networks THIS project needs.
+#
+# This is the one file in .devcontainer/ a project is meant to edit. Everything
+# else here is boilerplate copied from DEV-TEMPLATE. Add a line, rebuild or
+# re-run the firewall, done — no editing init-firewall.sh, no forked template.
+#
+# Format:
+#   - one entry per line: a domain name, a bare IPv4 address, or an IPv4 CIDR
+#   - `#` starts a comment, to end of line; blank lines are ignored
+#   - domains are resolved at boot and every A record is added to the ipset
+#
+# Entries here are BEST-EFFORT. One that does not resolve or does not parse
+# prints a warning naming the file and line, and the container still starts —
+# traffic to it is simply blocked. A typo costs you a warning, not a container
+# that will not boot. (The template's own list, firewall-allow.base.txt, is
+# fail-closed instead: without npm or the Anthropic API there is nothing to
+# start.)
+#
+# Two things to know before adding a host:
+#
+#   1. Add one when it is OBSERVED to be blocked, not in anticipation. The
+#      allow-list is the whole security value of the container; a speculative
+#      entry spends that for nothing.
+#   2. This is a BOOT-TIME SNAPSHOT of DNS. A domain behind a large CDN or a
+#      round-robin pool can move to an address that was not resolved at boot,
+#      and it then looks like a flaky network. The fix is to re-run
+#      `sudo bash .devcontainer/init-firewall.sh`, which re-resolves everything.
+#      A CIDR has neither problem.
+#
+# Apply a change without a full rebuild:
+#
+#     sudo bash .devcontainer/init-firewall.sh
+#
+# Examples — delete these, they are here to show the shapes:
+#
+#     registry.terraform.io          # a package index
+#     hub.docker.com                 # an API this project calls
+#     10.20.0.0/16                   # a private network
+#     192.168.4.7                    # a single host
