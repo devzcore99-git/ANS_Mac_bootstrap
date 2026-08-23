@@ -61,6 +61,14 @@
   //so the first request fails with a message about the URL rather than about
   //the missing file.  That is expected; fill in llm.env (see README) and
   //Rebuild Container.
+  //
+  //It also touches ~/.config/devcontainer/opencode.json, the optional
+  //host-level override for opencode's config.  Empty means "not overridden" —
+  //postStartCommand below falls back to the copy shipped in this repo — so the
+  //file existing changes nothing on its own.  It is touched for the same reason
+  //llm.env is: it lives inside a bind-mounted directory, and Docker CREATES a
+  //missing bind source rather than failing, owned by root on Docker Engine.
+  //
   //It also creates ~/.config/gh, for the readonly bind further down.  Docker
   //does not fail on a missing bind source — it CREATES it, owned by root on
   //Docker Engine — so on a machine where gh was never installed you would
@@ -87,20 +95,34 @@
   //reader must be able to create the -shm file.  Set Docker Desktop file
   //sharing to VirtioFS — WAL's shared memory fails over gRPC-FUSE.
   //
-  //opencode is deliberately NOT given a mount.  Its state lives in a WAL-mode
-  //SQLite database (~/.local/share/opencode/opencode.db) that holds sessions
-  //and messages alongside credentials, so sharing it with the host would share
-  //far more than authorization.  The container gets its own, and authorization
-  //arrives as environment variables instead — see the --env-file in runArgs
-  //above and OPENCODE_CONFIG in containerEnv below.
+  //opencode's OWN directories are still deliberately NOT mounted, neither of
+  //them.  ~/.local/share/opencode holds a WAL-mode SQLite database
+  //(opencode.db) carrying sessions and messages alongside credentials, so
+  //sharing it with the host would share far more than authorization.
+  //~/.config/opencode looks like a config directory but is really a package
+  //root: on a host with opencode installed it contains package.json,
+  //node_modules (with platform-specific native prebuilds — a macOS tree cannot
+  //load in a Linux container) and plugins/*.js, which opencode would EXECUTE
+  //here, next to the mounted Claude Code credentials and the gh token.  The
+  //container gets its own of both.
+  //
+  //What IS mounted below is ~/.config/devcontainer — this template's own
+  //host-level config directory, holding llm.env and the optional opencode.json
+  //override (see OPENCODE_CONFIG in containerEnv).  Readonly: nothing in the
+  //container has any reason to write a machine's configuration.
+  //
+  //The DIRECTORY is bound, not the two files individually, on purpose.  A
+  //single-file bind pins one inode, and most editors save by writing a temp
+  //file and renaming it over the target — which replaces the inode, leaving the
+  //container reading the old content until it is rebuilt.  Binding the
+  //directory means the name is resolved on each open, so an edit lands.
+  //
+  //llm.env being readable inside the container is not a new exposure: the
+  //--env-file above already bakes its values into the container's environment,
+  //so `env` shows them either way.
   "mounts": [
     "source=claude-code-config,target=/home/vscode/.claude,type=volume",
     "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly",
-    //This template's own host-level config directory: llm.env plus the
-    //optional opencode.json override (see OPENCODE_CONFIG below).  NOT
-    //opencode's own ~/.config/opencode, which is a package root whose
-    //node_modules and plugins/*.js would run in here.  The directory is
-    //bound rather than the files, so an editor that saves by rename lands.
     "source=${localEnv:HOME}/.config/devcontainer,target=/home/vscode/.config/devcontainer,type=bind,readonly",
     //"source=${localWorkspaceFolder}/../DBX_StockData,target=/workspaces/DBX_StockData,type=bind"
   ],
@@ -122,29 +144,62 @@
     //opencode's config file.  Without this it would look for
     //~/.config/opencode/opencode.json, which does not exist in a fresh
     //container (opencode has no mount — see the note above "mounts"), leaving
-    //it with no provider and no default model.  Pointing OPENCODE_CONFIG at a
-    //file in the repo ships that configuration with the template instead, so a
-    //new project is usable the moment it opens.  An env var rather than a copy
-    //into ~/.config: editing the file takes effect on the next opencode run,
-    //with no Rebuild Container.
+    //it with no provider and no default model.
     //
-    //.devcontainer/opencode.json declares a custom "local" provider on
-    //@ai-sdk/openai-compatible (bundled in the opencode binary — nothing is
+    //The value is a fixed path that postStartCommand points at one of two real
+    //files, host override first:
+    //
+    //  ~/.config/devcontainer/opencode.json   host-level, per machine, wins
+    //                                         when non-empty
+    //  .devcontainer/opencode.json            shipped with this template, the
+    //                                         fallback
+    //
+    //Why a symlink and not simply this variable: containerEnv is fixed when the
+    //container is created, so it cannot express "whichever of these two
+    //exists".  A symlink can be re-pointed on every start, and it still follows
+    //to the live file — so editing either one takes effect on the next opencode
+    //run, with no Rebuild Container.  (Creating the host file for the FIRST
+    //time is the exception: its bind source has to exist when the container
+    //starts, which is what the touch in initializeCommand guarantees.)
+    //
+    //The host file is empty by default and empty means "not overridden" — the
+    //same convention as llm.env, and the reason the fallback is a size test
+    //rather than an existence test.  Put a machine's own opencode.json there
+    //and the template's default stops applying to it entirely; it is a
+    //replacement, not a layer opencode merges.  Leave it empty and improvements
+    //to the shipped default keep arriving with the template.
+    //
+    //The shipped .devcontainer/opencode.json declares a custom "local" provider
+    //on @ai-sdk/openai-compatible (bundled in the opencode binary — nothing is
     //fetched from npm for it) rather than relying on the built-in openai
     //provider, which assumes OpenAI's own model catalog.  Its baseURL and
     //apiKey are "{env:OPENAI_BASE_URL}" / "{env:OPENAI_API_KEY}", substituted
     //by opencode at load time from the --env-file values, so no endpoint or
     //key is committed and one file works on every machine.  The model id is
-    //the one literal: it has to match what the server advertises.
+    //the one literal: it has to match what the server advertises, which is
+    //exactly the thing the host override exists to let a machine change without
+    //editing a repo.
     "OPENCODE_CONFIG": "/home/vscode/.opencode-config.json"
 
     //"STOCKDATA_DIR": "/workspaces/DBX_StockData"
   },
 
-  //Install the firewall's tooling once, at container-create time.  curl and
-  //iproute2 are already present on the base image; the rest are what
-  //init-firewall.sh needs.  Re-runs on a rebuild.
-  "onCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends iptables ipset dnsutils aggregate jq curl ca-certificates iproute2",
+  //Install packages once, at container-create time.  Re-runs on a rebuild.
+  //
+  //The package NAMES are not here.  They live in packages.base.txt (the
+  //template's set - the firewall's tooling, fail-closed) and packages.txt
+  //(this project's additions, best-effort), read by install-packages.sh.
+  //Same split as the firewall allow-list beside it, and for the same reason:
+  //a project adds software by editing a text file, never by editing this
+  //file, which --update-devcontainer overwrites wholesale.
+  //
+  //This runs AFTER features (so node and python exist) and BEFORE
+  //postStartCommand raises the firewall (so nothing here needs an allow-list
+  //entry).  It stays on the fatal chain: the base set is the firewall's own
+  //tooling, and a container that cannot raise its egress policy is broken in
+  //a way worth stopping for.  Project entries inside it are best-effort and
+  //warn instead - the script, not this string, decides which is which.
+  "onCreateCommand": "/bin/bash ${containerWorkspaceFolder}/.devcontainer/install-packages.sh",
 
   //Make sure the mounted directory can be read properly, then install opencode.
   //opencode ships as an npm package that pulls a prebuilt binary for the
@@ -204,18 +259,31 @@
   //It runs AFTER the chown above on purpose.  The Claude Code integration
   //writes into /home/vscode/.claude, the mounted credentials volume, which is
   //only writable as vscode once that chown has run.
-  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; }'",
+  //
+  //setup.sh runs last, and is this project's own hook - the seam for anything
+  //a package list cannot express: creating a venv and installing the project's
+  //manifest into it, fixing permissions on a mounted directory, generating a
+  //config.  It ships as a no-op, the template never overwrites it, and it is
+  //NOT on the fatal chain for the same reason opencode and herdr are not: a
+  //broken project hook should cost the container its setup, said out loud in
+  //the create log, rather than cost you the container.
+  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
 
-  //Apply the firewall on every start, but only when INIT_FIREWALL is "true".
-  //The toggle is evaluated here (unprivileged, where containerEnv is visible)
-  //so we never depend on passing env through sudo.  If the firewall script
-  //fails, this command fails and container start reports it (fail-closed).
-  //Before the firewall: point OPENCODE_CONFIG's symlink at the host override
-  //(~/.config/devcontainer/opencode.json) when that file has content, and at
-  //this project's .devcontainer/opencode.json otherwise.  Re-evaluated every
-  //start.  Non-fatal on purpose — a failure costs opencode its provider, not
-  //the container — and it runs first so it cannot swallow the firewall's exit
-  //status.
+  //Two things on every start, in this order.
+  //
+  //1. Point OPENCODE_CONFIG's symlink at the host override
+  //   (~/.config/devcontainer/opencode.json) when that file has content, and at
+  //   this template's own .devcontainer/opencode.json otherwise.  Re-evaluated
+  //   on every start, so filling in the host file takes a restart rather than a
+  //   rebuild.  Non-fatal on purpose: a failure here costs opencode its
+  //   provider, which is not worth refusing to start a container for — the same
+  //   call made for the opencode install in postCreateCommand.
+  //
+  //2. Apply the firewall, but only when INIT_FIREWALL is "true".  The toggle is
+  //   evaluated here (unprivileged, where containerEnv is visible) so we never
+  //   depend on passing env through sudo.  If the firewall script fails, this
+  //   command fails and container start reports it (fail-closed) — which is why
+  //   the opencode step goes first and cannot swallow its exit status.
   "postStartCommand": "/bin/bash -c 'if [ -s /home/vscode/.config/devcontainer/opencode.json ]; then OC=/home/vscode/.config/devcontainer/opencode.json; else OC=${containerWorkspaceFolder}/.devcontainer/opencode.json; fi; if ln -sfn \"$OC\" /home/vscode/.opencode-config.json; then echo \"[opencode] config: $OC\"; else echo \"[opencode] WARNING: could not link $OC; opencode will start with no provider\"; fi; if [ \"${INIT_FIREWALL:-true}\" = \"true\" ]; then echo \"[firewall] applying restricted egress policy\"; sudo bash ${containerWorkspaceFolder}/.devcontainer/init-firewall.sh; else echo \"[firewall] INIT_FIREWALL=${INIT_FIREWALL}, skipping\"; fi'",
 
   //Wait for the firewall to finish before the container is marked ready.

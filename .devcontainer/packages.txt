@@ -1,0 +1,46 @@
+# Project packages — extra software THIS project needs in its container.
+#
+# One of three files in .devcontainer/ a project is meant to edit; everything
+# else here is boilerplate copied from DEV-TEMPLATE. Add a line, rebuild, done —
+# no editing devcontainer.json, no editing install-packages.sh, no forked
+# template.
+#
+# Format: `installer:package`, one per line, `#` for comments.
+#
+#   apt:NAME     system package         (apt-get install)
+#   npm:NAME     global npm package     (npm install -g)
+#   pip:NAME     Python package         (python3 -m pip install)
+#
+# Pin a version wherever the installer supports it — `npm:typescript@5.4.5`,
+# `pip:ruff==0.6.9`. An unpinned line means a rebuild months from now installs
+# something different from what is in the container today.
+#
+# Entries here are BEST-EFFORT. One that fails prints a warning naming the file
+# and line, and the create continues without it — a typo costs a package, not a
+# container. (The template's own list, packages.base.txt, is fail-closed
+# instead: it is the firewall's tooling, and without it there is no firewall.)
+#
+# Three things to know before adding a package:
+#
+#   1. A package from anywhere other than the Ubuntu archives, npm or PyPI
+#      needs a matching host in `firewall-allow.txt` — a private index, a PPA,
+#      a direct download. Without it the install hangs on connect once the
+#      firewall is up, which reads as a flaky network rather than as policy.
+#   2. This installs into the CONTAINER, globally. A dependency of the project's
+#      own code belongs in the project's manifest — requirements.txt,
+#      pyproject.toml, package.json — installed into the project's own
+#      environment by setup.sh. Putting it here instead hides it from
+#      /projects-deps-audit and from anyone who never opens the container.
+#   3. Anything with real logic — creating a venv, fixing permissions, an
+#      installer that verifies a digest — belongs in `setup.sh`, not here.
+#
+# Apply a change: Rebuild Container. Or, without a rebuild:
+#
+#     bash .devcontainer/install-packages.sh
+#
+# Examples — delete these, they are here to show the shapes:
+#
+#     apt:ripgrep                    # a CLI tool
+#     apt:libpq-dev                  # a build-time system library
+#     npm:typescript@5.4.5           # a pinned global npm tool
+#     pip:ruff==0.6.9                # a pinned Python tool

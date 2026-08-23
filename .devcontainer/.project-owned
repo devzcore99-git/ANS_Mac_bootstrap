@@ -1,0 +1,36 @@
+# Files in .devcontainer/ that belong to the PROJECT, not to this template.
+#
+# /project-bootstrap --update-devcontainer refreshes every other file here from
+# DEV-TEMPLATE, overwriting the project's copy. The files listed below are
+# exempt: they are seeded from this directory when a project does not have them
+# yet, and never touched again.
+#
+# This list lives here, beside the files it names, rather than in the bootstrap
+# script in another repository — so adding a project-owned file is one line in
+# this file, versioned with the file itself, instead of an edit somewhere else
+# that has to be kept in sync.
+#
+# One filename per line; `#` starts a comment; blank lines are ignored.
+# Entries are plain filenames in this directory, not paths.
+#
+# The bar for adding one: a file a project is EXPECTED to edit. Everything
+# else, including anything a project merely might edit in a pinch, stays
+# boilerplate — the point of the split is that boilerplate can be refreshed
+# without a merge, and every exemption is a file that silently stops receiving
+# template fixes.
+
+# The firewall's project allow-list. The template ships it with comments and no
+# entries; a project adds the hosts it needs, and a refresh must not remove
+# them. This is the file the whole boilerplate/project split was built for.
+firewall-allow.txt
+
+# This project's extra packages. Same contract as the allow-list above: the
+# template ships it with comments and no entries, the project fills it in, and
+# a refresh must not empty it.
+packages.txt
+
+# The project setup hook - venv creation, permission fixes, anything a package
+# list cannot express. Ships as a no-op; whatever a project puts in it is the
+# one create-time step the template has no opinion about, so it is never
+# overwritten.
+setup.sh

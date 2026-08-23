@@ -1,5 +1,24 @@
 {
   "$schema": "https://opencode.ai/config.json",
+
+  // Workspace rules that every project carries at .claude/rules/workspace.md.
+  // Claude Code reads that directory natively; opencode does not, and it does
+  // NOT expand @-imports inside CLAUDE.md either, so this glob is the only way
+  // the shared rules reach opencode.
+  //
+  // The path is resolved against the PROJECT root (the nearest git directory
+  // above the working directory), not against this config file - verified on
+  // opencode 1.18.21, including from a subdirectory. That is what lets one
+  // config serve every project without a per-project opencode.json.
+  //
+  // The glob is deliberately non-recursive: .claude/rules/scoped/*.md holds
+  // path-scoped rules that Claude Code loads only when it reads a matching
+  // file, and opencode has no equivalent, so it should not swallow them.
+  //
+  // A host-level override at ~/.config/devcontainer/opencode.json REPLACES
+  // this file rather than layering onto it, so any override must carry this
+  // key too or its devpods lose the shared rules.
+  "instructions": [".claude/rules/*.md"],
   "provider": {
     "local": {
       "npm": "@ai-sdk/openai-compatible",
