@@ -1,0 +1,32 @@
+{
+  "skill_name": "{{NAME}}",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "<A realistic user message — the kind someone would actually type, with file paths and personal context. Not 'process this data'.>",
+      "expected_output": "<Human-readable description of what success looks like.>",
+      "files": [],
+      "assertions": [
+        "<Objectively checkable statement about the output. Add these after you have seen the first run.>"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "<A casually phrased variant — abbreviations, lowercase, maybe a typo.>",
+      "expected_output": "<What success looks like.>",
+      "files": [],
+      "assertions": []
+    },
+    {
+      "id": 3,
+      "prompt": "<An edge case: malformed input, an unusual request, or a spot where the instructions might be ambiguous.>",
+      "expected_output": "<What success looks like — which may be 'refuses and explains why'.>",
+      "files": [],
+      "assertions": []
+    }
+  ],
+  "trigger_queries": [
+    { "query": "<A prompt that should activate this skill without naming its domain outright.>", "should_trigger": true },
+    { "query": "<A near-miss: shares keywords with this skill but needs something else.>", "should_trigger": false }
+  ]
+}
