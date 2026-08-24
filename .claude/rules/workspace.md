@@ -119,9 +119,10 @@ graphify affected "<symbol>" --depth 2      # what a change to it reaches
 - **The graph is a map, not evidence.** It is AST-derived, `INFERRED` edges are
   model guesses, and community names are placeholders like `Community 7`. Read
   the source before asserting anything from it.
-- **graphify is a per-machine install and may not be here.** The skill reports
-  `unavailable` and changes nothing; work from the source as normal. Do not
-  install it to satisfy this section — that is the ask above.
+- **In a devcontainer graphify is always present**; on a host it is a
+  per-machine install and may not be. Where it is missing the skill reports
+  `unavailable` and changes nothing — work from the source as normal, and do
+  not install it to satisfy this section, which is the ask above.
 
 ## Installation Files
 

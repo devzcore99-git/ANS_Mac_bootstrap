@@ -194,7 +194,7 @@ def cmd_init(args) -> int:
                 die(
                     "Error: task at index {} is missing required field {!r}.\n"
                     "       Required: id, title, acceptance. Optional: files, "
-                    "depends_on, requirement.".format(i, field)
+                    "test_file, depends_on, requirement.".format(i, field)
                 )
         if item["id"] in seen:
             die("Error: duplicate task id {!r}.".format(item["id"]))
@@ -205,6 +205,11 @@ def cmd_init(args) -> int:
                 "title": item["title"],
                 "requirement": item.get("requirement", ""),
                 "files": item.get("files", []),
+                # The test that judges this task, written and committed before
+                # dispatch. Kept separate from `files` on purpose: `files` is
+                # what the agent may edit, and the one file it must not touch is
+                # this one. Step 4f checks the commit against it.
+                "test_file": item.get("test_file", ""),
                 "depends_on": item.get("depends_on", []),
                 "acceptance": item["acceptance"],
                 "status": "pending",
@@ -331,6 +336,10 @@ def cmd_next(args) -> int:
                     "title": t["title"],
                     "requirement": t["requirement"],
                     "files": t["files"],
+                    # .get: a run started before test_file existed has no
+                    # such key, and upgrading the script must not break a loop
+                    # that is already in flight.
+                    "test_file": t.get("test_file", ""),
                     "acceptance": t["acceptance"],
                     "attempts": t["attempts"],
                     "last_failure": t["last_failure"],
