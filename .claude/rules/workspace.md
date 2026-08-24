@@ -85,6 +85,44 @@ A genuinely machine-level tool (CLI, system package, runtime) is the exception,
 and exactly the case that needs the ask above: name it, say why it can't live in
 the project, and wait.
 
+## Code Graph
+
+Code projects carry `/graphify-update` in `.claude/skills/graphify-update/` —
+prose and container repositories do not, so check the directory exists before
+reaching for it. It builds a **graphify** code graph into `graphify-out/`: a
+map of the symbols, calls, imports and communities in this repository, produced
+from the AST with no LLM call and no API key.
+
+```bash
+python3 .claude/skills/graphify-update/graphify-update.py     # build or refresh
+```
+
+Use the map before reading the tree. `graphify-out/GRAPH_REPORT.md` is the
+whole architecture in about two thousand tokens — god nodes, communities with
+member lists, import cycles, cross-community bridges, isolated nodes — and
+these answer a specific question without a grep:
+
+```bash
+graphify query "<question>" --budget 1500   # scoped subgraph for one question
+graphify explain "<symbol>"                 # a symbol and its neighbours
+graphify path "<A>" "<B>"                   # how two symbols connect
+graphify affected "<symbol>" --depth 2      # what a change to it reaches
+```
+
+- **Never commit `graphify-out/`.** The skill excludes it through
+  `.git/info/exclude` on every run, which is local and leaves the working tree
+  clean. Do not add it to `.gitignore` instead.
+- **Never hand-run `graphify extract` without `--code-only`.** That flag, and
+  `--no-label` on the clustering pass, are what keep the graph free: without
+  them graphify sends this project's documents to an LLM backend and bills for
+  them. The skill always passes both — run the skill, not the tool.
+- **The graph is a map, not evidence.** It is AST-derived, `INFERRED` edges are
+  model guesses, and community names are placeholders like `Community 7`. Read
+  the source before asserting anything from it.
+- **graphify is a per-machine install and may not be here.** The skill reports
+  `unavailable` and changes nothing; work from the source as normal. Do not
+  install it to satisfy this section — that is the ask above.
+
 ## Installation Files
 
 Install steps live at the same two paths in every project:
