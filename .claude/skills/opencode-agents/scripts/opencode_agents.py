@@ -46,6 +46,20 @@ EX_FAIL = 1          # one or more tasks failed
 EX_USAGE = 2         # bad arguments / bad task file
 EX_PREFLIGHT = 3     # environment not usable (no opencode, bad model, dirty repo)
 
+# opencode's own session ledger. Every run through the CLI *and* through the
+# TUI writes a row here, which is what lets `tokens` report on /herdr-agents —
+# that skill drives the TUI and so has no stream of its own to parse.
+#
+# Deliberately read-only everywhere below: this file also holds credentials
+# (see DEVCONTAINER/CLAUDE.md on why opencode gets no host mount), and it is
+# opencode's live WAL database, not ours to write.
+OPENCODE_DB = Path.home() / ".local/share/opencode/opencode.db"
+# One worktree per task is the contract in both skills, so the directory's last
+# segment is the task id. herdr puts them under ~/.herdr/worktrees/<repo>/<task>,
+# this script under <project>/.opencode-agents/worktrees/<task>.
+HERDR_WORKTREE_MARK = "/.herdr/worktrees/"
+SELF_WORKTREE_MARK = "/%s/worktrees/" % STATE_DIR_NAME
+
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 # opencode prints these to the console when --agent does not resolve to a
 # usable primary agent. It then runs the DEFAULT agent and exits 0.
@@ -375,6 +389,155 @@ def cmd_check(args: argparse.Namespace) -> int:
 def cmd_agents(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     emit({"project": str(project), "agents": discover_agents(project)})
+    return EX_OK
+
+
+# --------------------------------------------------------------------------
+# tokens
+# --------------------------------------------------------------------------
+
+def _model_id(raw) -> str:
+    """The session table stores `model` as a JSON object, not a bare string.
+
+    Observed: {"id":"qwen/qwen3.6-35b-a3b","providerID":"ham51-2",...}. Older rows
+    may hold a plain string, so both shapes are accepted rather than assumed.
+    """
+    if not raw:
+        return "-"
+    if isinstance(raw, str) and not raw.startswith("{"):
+        return raw
+    try:
+        d = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return str(raw)[:60]
+    if not isinstance(d, dict):
+        return str(raw)[:60]
+    prov, mid = d.get("providerID"), d.get("id")
+    return f"{prov}/{mid}" if prov and mid else str(mid or "-")
+
+
+def _task_of(directory: str) -> tuple[str | None, str | None]:
+    """(runner, task id) for a session, from the worktree it ran in.
+
+    Returns (None, None) for an ordinary interactive session, which is how a
+    hand-run opencode is told apart from an agent dispatched by either skill.
+    """
+    if not directory:
+        return None, None
+    d = directory.rstrip("/")
+    if HERDR_WORKTREE_MARK in d:
+        return "herdr-agents", d.rsplit("/", 1)[-1]
+    if SELF_WORKTREE_MARK in d:
+        return "opencode-agents", d.rsplit("/", 1)[-1]
+    return None, None
+
+
+def read_sessions(since_days: int | None, directory: str | None) -> list[dict]:
+    """Session rows from opencode's ledger, newest first.
+
+    sqlite3 is stdlib, so this adds no dependency. Opened read-only through a
+    file: URI so a corrupt or busy database fails as an error rather than
+    silently creating an empty one beside it.
+    """
+    import sqlite3
+    if not OPENCODE_DB.exists():
+        die(
+            f"No opencode session database at {OPENCODE_DB}.\n"
+            "       Nothing has run yet, or this is a devcontainer — opencode's\n"
+            "       state is deliberately unmounted there, so a rebuild resets it.",
+            EX_PREFLIGHT,
+        )
+    try:
+        con = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error as exc:
+        die(f"Could not open {OPENCODE_DB}: {exc}", EX_PREFLIGHT)
+
+    where, params = [], []
+    if since_days:
+        cutoff = int((time.time() - since_days * 86400) * 1000)
+        where.append("time_created >= ?")
+        params.append(cutoff)
+    if directory:
+        where.append("directory LIKE ?")
+        params.append(f"{directory.rstrip('/')}%")
+    sql = (
+        "SELECT id, time_created, directory, title, model, agent, cost, "
+        "tokens_input, tokens_output, tokens_reasoning, "
+        "tokens_cache_read, tokens_cache_write FROM session"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY time_created DESC"
+    try:
+        rows = con.execute(sql, params).fetchall()
+    except sqlite3.Error as exc:
+        die(f"Could not read the session table: {exc}", EX_PREFLIGHT)
+    finally:
+        con.close()
+
+    out = []
+    for r in rows:
+        runner, task = _task_of(r[2] or "")
+        inp, outp, reas = (r[7] or 0), (r[8] or 0), (r[9] or 0)
+        out.append({
+            "session": r[0],
+            "started": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime((r[1] or 0) / 1000)),
+            "directory": r[2] or "",
+            "runner": runner,
+            "task": task,
+            "title": (r[3] or "").strip()[:80] or None,
+            "model": _model_id(r[4]),
+            "agent": r[5] or None,
+            # Local providers carry no pricing, so this is 0.0 for ham51-2/* and
+            # only meaningful for a hosted provider. Reported, never summed into
+            # a headline that would read as free when it is merely unpriced.
+            "cost": r[6] or 0.0,
+            "tokens": {
+                "input": inp, "output": outp, "reasoning": reas,
+                "cache_read": r[10] or 0, "cache_write": r[11] or 0,
+                "total": inp + outp + reas,
+            },
+        })
+    return out
+
+
+def cmd_tokens(args: argparse.Namespace) -> int:
+    directory = None
+    if args.here:
+        directory = str(resolve_project(args.project))
+    sessions = read_sessions(args.since, directory)
+    if args.agents_only:
+        sessions = [s for s in sessions if s["runner"]]
+
+    by_model: dict[str, dict] = {}
+    by_runner: dict[str, dict] = {}
+    totals = {"input": 0, "output": 0, "reasoning": 0, "total": 0}
+    for s in sessions:
+        t = s["tokens"]
+        for k in totals:
+            totals[k] += t[k]
+        for bucket, key in ((by_model, s["model"]), (by_runner, s["runner"] or "interactive")):
+            b = bucket.setdefault(key, {"sessions": 0, "input": 0, "output": 0, "total": 0})
+            b["sessions"] += 1
+            for k in ("input", "output", "total"):
+                b[k] += t[k]
+
+    unpriced = any(s["model"].startswith("ham51-2/") for s in sessions)
+    payload = {
+        "database": str(OPENCODE_DB),
+        "since_days": args.since,
+        "directory": directory,
+        "sessions": len(sessions),
+        "totals": totals,
+        "by_model": by_model,
+        "by_runner": by_runner,
+        # Named so a reader cannot mistake an unpriced local run for a free one.
+        "cost_note": ("local provider has no pricing configured; cost is not tracked"
+                      if unpriced else None),
+    }
+    if not args.summary:
+        payload["detail"] = sessions[: args.limit]
+    emit(payload)
     return EX_OK
 
 
@@ -1173,6 +1336,18 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("check", help="verify opencode, model, and agent definitions")
     c.add_argument("--model", help="model to validate instead of the config default")
     c.set_defaults(func=cmd_check)
+
+    tk = sub.add_parser("tokens", help="token usage from opencode's session ledger")
+    tk.add_argument("--since", type=int, metavar="DAYS",
+                    help="only sessions started in the last N days (default: all)")
+    tk.add_argument("--here", action="store_true",
+                    help="only sessions whose directory is under the target project")
+    tk.add_argument("--agents-only", action="store_true",
+                    help="drop interactive sessions; keep only herdr/opencode agent worktrees")
+    tk.add_argument("--summary", action="store_true", help="omit the per-session detail")
+    tk.add_argument("--limit", type=int, default=50,
+                    help="max sessions in the detail list (default 50)")
+    tk.set_defaults(func=cmd_tokens)
 
     a = sub.add_parser("agents", help="list agent definitions opencode will see")
     a.set_defaults(func=cmd_agents)

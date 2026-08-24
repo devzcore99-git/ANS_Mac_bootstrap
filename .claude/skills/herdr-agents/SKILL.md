@@ -166,9 +166,12 @@ which is a different trust and latency story and not what this skill is for.
 
 Pick per task, not per run. A larger model earns its extra latency on work that
 has to hold an interface in its head; a smaller one is the better trade for
-mechanical edits, and its shorter window matters less there. **The model is
-per agent**, so a batch can mix them — the constraint is that the local endpoint
-serves one agent at a time regardless, so this changes quality, never throughput.
+mechanical edits, and its shorter window matters less there.
+
+**But pick one model per batch.** The endpoint keeps a single model resident and
+loads others on demand, so alternating between two makes it unload and reload
+weights between agents — minutes of wall clock, not seconds. Choosing per task
+is right when the batch is one task; across a batch, choose once.
 
 Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among live agents. The
 name follows the pane's occupant and is cleared when that agent exits, so reuse
@@ -281,8 +284,28 @@ In practice the transcript is the weaker evidence anyway. Judge the diff.
 
 ### Step 6: Commit, review, merge, tear down
 
-Commit from **outside** the agent, so the agent never needs write access to git
-metadata and you control the message:
+**Read what the run cost before you tear the worktrees down.** herdr drives the
+opencode TUI, so there is no stream to parse here — but opencode records every
+session either way, and `/opencode-agents` ships the reader:
+
+```bash
+python3 ../opencode-agents/scripts/opencode_agents.py tokens --agents-only --since 1
+```
+
+Both skills are installed side by side in every project's `.claude/skills/`, so
+that relative path holds; from elsewhere, point at the ASST_BBMax copy. Rows are
+attributed per task because each task has its own worktree and the command reads
+the task id from the worktree's last path segment. A row with `total: 0` is an
+agent that never got a reply — the same silent failure Step 4a hunts, visible
+here after the fact.
+
+That command belongs to `/opencode-agents`, not this skill, so its documentation
+lives there: read `../opencode-agents/references/token-accounting.md` for the
+fields and the caveats — notably that the ledger is container-local, so a
+devcontainer rebuild resets it to nothing.
+
+Then commit from **outside** the agent, so the agent never needs write access to
+git metadata and you control the message:
 
 ```bash
 git -C <worktree-path> add -A
@@ -406,6 +429,6 @@ Stop and ask the user when:
 
 | Skill | Difference |
 | --- | --- |
-| `/opencode-agents` | Same model and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. Takes `--model` as a flag and per task in the task file, where this skill passes it through `--` at `agent start` |
+| `/opencode-agents` | Same model and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. Takes `--model` as a flag and per task in the task file, where this skill passes it through `--` at `agent start`. Also ships the `tokens` reader Step 6 uses |
 | `/commit2repo` | Merging and pushing a reviewed `herdr_*` branch |
 | `/projects-git-cleanup` | Sweeps `claude_*` and `worktree-*` only — never `herdr_*` |

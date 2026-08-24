@@ -62,7 +62,6 @@ $RECYCLE.BIN/
 *.log
 tmp/
 .tmp/
-.claude/skills/commit2repo
 
 # Added by /project-bootstrap — workspace standard patterns.
 .claude/worktrees/
