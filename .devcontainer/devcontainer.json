@@ -151,7 +151,7 @@
     //
     //  ~/.config/devcontainer/opencode.json   host-level, per machine, wins
     //                                         when non-empty
-    //  .devcontainer/opencode.json            shipped with this template, the
+    //  .devcontainer/opencode.json.fallback   shipped with this template, the
     //                                         fallback
     //
     //Why a symlink and not simply this variable: containerEnv is fixed when the
@@ -169,7 +169,7 @@
     //replacement, not a layer opencode merges.  Leave it empty and improvements
     //to the shipped default keep arriving with the template.
     //
-    //The shipped .devcontainer/opencode.json declares a custom "local" provider
+    //The shipped .devcontainer/opencode.json.fallback declares a custom "local" provider
     //on @ai-sdk/openai-compatible (bundled in the opencode binary — nothing is
     //fetched from npm for it) rather than relying on the built-in openai
     //provider, which assumes OpenAI's own model catalog.  Its baseURL and
@@ -273,7 +273,7 @@
   //
   //1. Point OPENCODE_CONFIG's symlink at the host override
   //   (~/.config/devcontainer/opencode.json) when that file has content, and at
-  //   this template's own .devcontainer/opencode.json otherwise.  Re-evaluated
+  //   this template's own .devcontainer/opencode.json.fallback otherwise.  Re-evaluated
   //   on every start, so filling in the host file takes a restart rather than a
   //   rebuild.  Non-fatal on purpose: a failure here costs opencode its
   //   provider, which is not worth refusing to start a container for — the same
@@ -284,7 +284,7 @@
   //   depend on passing env through sudo.  If the firewall script fails, this
   //   command fails and container start reports it (fail-closed) — which is why
   //   the opencode step goes first and cannot swallow its exit status.
-  "postStartCommand": "/bin/bash -c 'if [ -s /home/vscode/.config/devcontainer/opencode.json ]; then OC=/home/vscode/.config/devcontainer/opencode.json; else OC=${containerWorkspaceFolder}/.devcontainer/opencode.json; fi; if ln -sfn \"$OC\" /home/vscode/.opencode-config.json; then echo \"[opencode] config: $OC\"; else echo \"[opencode] WARNING: could not link $OC; opencode will start with no provider\"; fi; if [ \"${INIT_FIREWALL:-true}\" = \"true\" ]; then echo \"[firewall] applying restricted egress policy\"; sudo bash ${containerWorkspaceFolder}/.devcontainer/init-firewall.sh; else echo \"[firewall] INIT_FIREWALL=${INIT_FIREWALL}, skipping\"; fi'",
+  "postStartCommand": "/bin/bash -c 'if [ -s /home/vscode/.config/devcontainer/opencode.json ]; then OC=/home/vscode/.config/devcontainer/opencode.json; else OC=${containerWorkspaceFolder}/.devcontainer/opencode.json.fallback; fi; if ln -sfn \"$OC\" /home/vscode/.opencode-config.json; then echo \"[opencode] config: $OC\"; else echo \"[opencode] WARNING: could not link $OC; opencode will start with no provider\"; fi; if [ \"${INIT_FIREWALL:-true}\" = \"true\" ]; then echo \"[firewall] applying restricted egress policy\"; sudo bash ${containerWorkspaceFolder}/.devcontainer/init-firewall.sh; else echo \"[firewall] INIT_FIREWALL=${INIT_FIREWALL}, skipping\"; fi'",
 
   //Wait for the firewall to finish before the container is marked ready.
   "waitFor": "postStartCommand"
