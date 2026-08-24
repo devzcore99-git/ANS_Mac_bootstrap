@@ -260,6 +260,28 @@
   //writes into /home/vscode/.claude, the mounted credentials volume, which is
   //only writable as vscode once that chown has run.
   //
+  //graphify is installed next, by .devcontainer/install-graphify.sh.  It turns
+  //this repository into a queryable knowledge graph, and the "Code Graph"
+  //section of the workspace rule set every project carries tells agents to
+  //reach for `graphify query` before reading the tree.  That instruction was
+  //dead inside a container until now: graphify was a per-machine install, so
+  //the /graphify-update skill reported `unavailable` and every session fell
+  //back to grepping.
+  //
+  //A script rather than another clause here, for the same reason herdr is one:
+  //it picks pipx over pip (the python feature defaults to Ubuntu's
+  //externally-managed python, where a plain `pip install` refuses), pins the
+  //version, and verifies what landed on PATH — and check.sh can lint a script
+  //but not a JSON string.  The package is `graphifyy`, two y's, which is not a
+  //typo; see the header of that file, which also says why `graphify install`
+  //is deliberately not run.
+  //
+  //Like opencode and herdr it is NOT on the fatal chain — `|| echo` keeps a
+  //PyPI outage costing the container graphify rather than the whole create.
+  //Unlike herdr it needs nothing from the firewall: pypi.org and
+  //files.pythonhosted.org are already in firewall-allow.base.txt, and
+  //extraction and querying are local and offline.
+  //
   //setup.sh runs last, and is this project's own hook - the seam for anything
   //a package list cannot express: creating a venv and installing the project's
   //manifest into it, fixing permissions on a mounted directory, generating a
@@ -267,7 +289,7 @@
   //NOT on the fatal chain for the same reason opencode and herdr are not: a
   //broken project hook should cost the container its setup, said out loud in
   //the create log, rather than cost you the container.
-  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
+  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-graphify.sh || echo \"[postCreate] WARNING: graphify install failed; the container is otherwise ready. Re-run .devcontainer/install-graphify.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
 
   //Two things on every start, in this order.
   //
