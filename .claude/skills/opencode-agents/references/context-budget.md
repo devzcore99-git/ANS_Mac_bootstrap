@@ -6,7 +6,7 @@ window does not fail, it gets vague, forgets the interface it was handed, and
 re-reads files it already has. None of that shows up in an exit code, which is
 why `dispatch` reports a `context` block per task.
 
-Every number here was measured on 2026-08-09 against `ham51/qwen/qwen3.5-9b`:
+Every number here was measured on 2026-08-09 against `ham51-2/qwen/qwen3.5-9b`:
 ten real `CODE_GitTracker` runs, plus controlled single-prompt runs.
 
 ## What the window actually costs

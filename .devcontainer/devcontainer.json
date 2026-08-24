@@ -169,7 +169,7 @@
     //replacement, not a layer opencode merges.  Leave it empty and improvements
     //to the shipped default keep arriving with the template.
     //
-    //The shipped .devcontainer/opencode.json.fallback declares a custom "local" provider
+    //The shipped .devcontainer/opencode.json.fallback declares a custom "ham51-2" provider
     //on @ai-sdk/openai-compatible (bundled in the opencode binary — nothing is
     //fetched from npm for it) rather than relying on the built-in openai
     //provider, which assumes OpenAI's own model catalog.  Its baseURL and
