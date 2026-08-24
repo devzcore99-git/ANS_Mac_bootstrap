@@ -94,7 +94,7 @@ JSON — an array of tasks, or an object with defaults plus `tasks`:
 
 ```json
 {
-  "model": "ham51/qwen/qwen3.5-9b",
+  "model": "ham51-2/qwen/qwen3.5-9b",
   "agent": "builder",
   "tasks": [
     {
@@ -134,7 +134,7 @@ what decides whether the work comes back right. A task that fills its context
 does not fail. It gets vague, forgets the interface it was given, and re-reads
 files it already has, and none of that shows in the exit code.
 
-Measured against `ham51/qwen/qwen3.5-9b`: ~4,900 tokens of fixed overhead per
+Measured against `ham51-2/qwen/qwen3.5-9b`: ~4,900 tokens of fixed overhead per
 step plus ~1,900 of growth, so a 128,000 budget is about **60 tool calls**. Most
 tasks are nowhere near it — the worst so far peaked at 55,842 over 27 steps.
 
@@ -220,7 +220,7 @@ Precedence: per-task `model` > `--model` > the file's top-level `model` > the
 `model` key in `~/.config/opencode/opencode.jsonc`.
 
 ```bash
-python3 scripts/opencode_agents.py dispatch --tasks tasks.json --model ham51/qwen/qwen3.6-35b-a3b
+python3 scripts/opencode_agents.py dispatch --tasks tasks.json --model ham51-2/qwen/qwen3.6-35b-a3b
 ```
 
 Both `dispatch` and `check` validate the id against `opencode models` and exit
@@ -339,7 +339,7 @@ These are all observed on this machine, not guesses.
   `~/.config/opencode/opencode.jsonc` held `"model": "qweb/qwen3.5-9b"` (typo,
   and missing the provider prefix) until 2026-08-09; bare `opencode run` failed
   with "Unexpected server error" rather than naming the model. It is now
-  `ham51/qwen/qwen3.5-9b` and works. `check` re-validates the default against
+  `ham51-2/qwen/qwen3.5-9b` and works. `check` re-validates the default against
   `opencode models` every run, so pass `--model` if it ever reports this again.
 
 - **Uncommitted agent files are invisible to the agents.** A worktree is checked

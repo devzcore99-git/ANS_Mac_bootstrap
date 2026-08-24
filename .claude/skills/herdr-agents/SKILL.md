@@ -145,7 +145,7 @@ model is selected there:
 
 ```bash
 herdr agent start <id> --kind opencode --pane <pane-id> --timeout 60000 \
-  -- --model ham51/qwen/qwen3.6-35b-a3b
+  -- --model ham51-2/qwen/qwen3.6-35b-a3b
 ```
 
 **Confirm it took effect before prompting.** The start result echoes the
@@ -160,7 +160,7 @@ Omit `--model` and opencode uses the `model` key in
 fallback — set it to whichever model you want unattended work on, and pass
 `--model` only to deviate.
 
-`opencode models` lists the ids. Only the `ham51/*` entries are the local
+`opencode models` lists the ids. Only the `ham51-2/*` entries are the local
 endpoint; the `opencode/*` ones are a hosted catalogue reached over the network,
 which is a different trust and latency story and not what this skill is for.
 

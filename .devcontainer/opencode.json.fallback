@@ -20,9 +20,9 @@
   // key too or its devpods lose the shared rules.
   "instructions": [".claude/rules/*.md"],
   "provider": {
-    "local": {
+    "ham51-2": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Local LLM",
+      "name": "Ham51-2",
       "options": {
         "baseURL": "{env:OPENAI_BASE_URL}",
         "apiKey": "{env:OPENAI_API_KEY}"
@@ -45,5 +45,5 @@
       }
     }
   },
-  "model": "local/qwen/qwen3.6-35b-a3b"
+  "model": "ham51-2/qwen/qwen3.6-35b-a3b"
 }

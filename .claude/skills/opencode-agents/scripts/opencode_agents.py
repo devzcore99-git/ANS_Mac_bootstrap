@@ -32,7 +32,7 @@ DEFAULT_RETRIES = 2
 
 # Context budget. The local models are small; the window is the binding
 # constraint on what a task can be, so peak usage is reported per task.
-# Measured on 2026-08-09 against ham51/qwen/qwen3.5-9b: ~4,900 tokens of fixed
+# Measured on 2026-08-09 against ham51-2/qwen/qwen3.5-9b: ~4,900 tokens of fixed
 # overhead with a restricted toolset (5,500 with the full one), then ~1.9K per
 # step. 128K therefore buys roughly 60 tool calls. The endpoint actually serves
 # 262,144, but a 9B Q4's useful reasoning span is far shorter than its
@@ -1133,7 +1133,7 @@ EPILOG = """\
 Task file (JSON) — an array, or an object with defaults plus "tasks":
 
   {
-    "model": "ham51/qwen/qwen3.5-9b",
+    "model": "ham51-2/qwen/qwen3.5-9b",
     "agent": "builder",
     "tasks": [
       {"id": "parser", "prompt": "Implement src/parser.py ... Do not touch other files.",
@@ -1179,7 +1179,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("dispatch", help="run tasks as opencode agents, one worktree each")
     d.add_argument("--tasks", required=True, help="path to the JSON task file")
-    d.add_argument("--model", help="provider/model, e.g. ham51/qwen/qwen3.5-9b")
+    d.add_argument("--model", help="provider/model, e.g. ham51-2/qwen/qwen3.5-9b")
     d.add_argument("--agent", help="opencode agent for tasks that name none")
     d.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL,
                    help=f"concurrent agents (default {DEFAULT_PARALLEL}; raising it "
