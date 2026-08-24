@@ -1,15 +1,18 @@
 ---
 name: herdr-agents
 description: >-
-  Run opencode subagents inside Herdr panes — one git worktree and workspace per
-  task — then watch their live lifecycle state, review the diff, commit, merge,
-  and tear the worktrees down. Use when the user wants to farm work out through
-  Herdr, spin up agents in herdr panes, watch or take over an agent while it
-  works, or run a batch of independent tasks on the local model with a terminal
-  to look at — including phrasings like "use herdr for this", "start some herdr
-  agents", "have herdr run these tasks", or "I want to watch them work". Requires
-  Claude Code to be running inside a Herdr pane. Not for a single edit Claude
-  should make itself, and not for configuring Herdr.
+  THE orchestrator for subagent work: runs opencode agents inside Herdr panes,
+  one git worktree and workspace per task, with live lifecycle state, then
+  reviews the diff, commits, merges, and tears the worktrees down. Use whenever
+  work is farmed out to agents at all — a batch of independent tasks, work
+  dispatched to the local model, /build-loop and /build-loop-recommend-build
+  builds — and for watching or taking over an agent mid-task. Triggers on "farm
+  this out", "spin up agents", "run these tasks in parallel", "use my local
+  model", "use herdr for this", and "I want to watch them work". How many run at
+  once is configured, not fixed. Requires Claude Code to be running inside a
+  Herdr pane. /opencode-agents is the legacy runner and is used only on an
+  explicit request. Not for a single edit Claude should make itself, and not for
+  configuring Herdr.
 metadata:
   runtime: herdr-cli
   requires: herdr 0.8+, opencode CLI, git
@@ -26,8 +29,13 @@ the agent is on screen, its lifecycle state is authoritative rather than
 inferred, and you can focus its pane and take over mid-task. The price is that
 agents run **unconfined** — see [Agents are not sandboxed](#agents-are-not-sandboxed).
 
-For confined, fully headless dispatch instead, use `/opencode-agents`. The two
-skills differ only in the runner; the task-shaping rules below are shared.
+**This is the orchestrator for agent work.** Anything that farms tasks out to
+subagents — `/build-loop`, `/build-loop-recommend-build`, a batch the user hands
+over directly — dispatches through here. `/opencode-agents` is the legacy
+runner and is chosen only when the user explicitly names it or asks for headless
+dispatch or bubblewrap confinement, the two things it still does that Herdr does
+not. The two share their task-shaping rules, the developer ladder, and the token
+reader; only the runner differs.
 
 ## Before you start
 
@@ -190,7 +198,9 @@ different trust and latency story and not what this skill is for.
 
 **Pick one level per batch.** The endpoint keeps a single model resident, so
 alternating makes it unload and reload weights between agents — minutes of wall
-clock, not seconds. Across a batch, choose once.
+clock, not seconds. Across a batch, choose once. This binds harder now that
+several agents run at once: a batch at two levels thrashes the endpoint between
+them for its whole duration.
 
 Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among live agents. The
 name follows the pane's occupant and is cleared when that agent exits, so reuse
@@ -410,11 +420,23 @@ All observed on this machine against herdr 0.8.0, not inferred.
   committing, and the agent runs with the old definition — or the wrong agent
   runs entirely.
 
-- **Run one agent at a time.** Herdr makes parallelism look free — the panes are
-  right there — but this is one local model on one endpoint. Concurrent agents
-  contend for the same GPU rather than using idle capacity, so nothing finishes
-  sooner and everything drifts toward its timeout. Budget wall clock as the
-  *sum* of the tasks.
+- **How many agents run at once is a config value — read it, do not assume.**
+  The endpoint serves three at a time now; it served one before the models were
+  upgraded, which is exactly why the number lives in a file rather than in this
+  sentence:
+
+  ```bash
+  python3 ../_lib/agents_config.py --project <project>
+  ```
+
+  First match wins: `$AGENTS_MAX_PARALLEL`, then the project's own
+  `.claude/agents-config.json`, then the `projects` map in
+  `~/.config/opencode/agents-config.json`, then that file's
+  `max_parallel_agents`, then a built-in 3. Give a project its own entry to hold
+  it lower while its tasks are large. Past the configured number the agents
+  contend for the same weights rather than using idle capacity, so nothing
+  finishes sooner. Budget wall clock as the sum of the tasks over the
+  concurrency, and treat that divisor as a ceiling rather than a promise.
 
 - **The endpoint blips.** A failure inside two seconds having produced nothing
   is a transient provider error, not a task failure. Re-prompt the same agent
@@ -448,6 +470,8 @@ Stop and ask the user when:
 
 | Skill | Difference |
 | --- | --- |
-| `/opencode-agents` | Same model and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. Takes `--level`/`--model` as flags and per task in the task file, where this skill passes the resolved id through `--` at `agent start`. Also ships the shared developer ladder, its `levels` reader, and the `tokens` reader Step 6 uses |
+| `/opencode-agents` | **Legacy.** Same models and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. Use only on an explicit request. Still ships the shared developer ladder, its `levels` reader, and the `tokens` reader Step 6 uses — those are current, not legacy |
+| `/build-loop` | Dispatches its per-task build agents through this skill |
+| `/build-loop-recommend-build` | The same, for every round of its outer loop |
 | `/commit2repo` | Merging and pushing a reviewed `herdr_*` branch |
 | `/projects-git-cleanup` | Sweeps `claude_*` and `worktree-*` only — never `herdr_*` |

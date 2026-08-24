@@ -1,21 +1,37 @@
 ---
 name: opencode-agents
 description: >-
-  Delegate coding tasks to subagents run by the opencode CLI against a locally
-  configured model, each in its own git worktree, then review, merge, and clean
-  up their work. Use when the user wants to farm work out to opencode, run tasks
-  on their own/local LLM instead of Claude, orchestrate several opencode agents
-  in parallel over a project, or hand a batch of independent changes to a cheaper
-  model — including phrasings like "use my local model for this", "spin up
-  opencode agents", "have opencode build these", or "run these tasks on qwen".
-  Not for a single edit Claude should just make, and not for configuring opencode
-  itself.
+  LEGACY headless runner for opencode subagents, each in its own git worktree.
+  Superseded by /herdr-agents, which is the orchestrator for all agent work —
+  use this one ONLY when the user explicitly names it, explicitly asks for the
+  headless or sandboxed runner, or is outside Herdr and has said to proceed
+  anyway. Do not choose it on your own when a task merely needs subagents; that
+  is /herdr-agents. Still the home of two things both skills read: the
+  developer-level ladder (`levels`) and the token-accounting reader (`tokens`),
+  which remain current and are not legacy. Triggers only on explicit phrasings
+  like "use opencode-agents", "run it headless", "use the sandboxed runner", or
+  "the old opencode dispatcher".
 metadata:
   runtime: python3-stdlib
   requires: opencode CLI, git
+  status: legacy
+  superseded_by: herdr-agents
 ---
 
-# opencode agents
+# opencode agents (legacy)
+
+> **Legacy. `/herdr-agents` orchestrates agents now.** It runs the same models
+> on the same task-shaping rules, and adds what this runner cannot: authoritative
+> lifecycle state instead of inferred state, a pane you can watch or take over
+> mid-task, and the hang detection that separates a stalled endpoint from a slow
+> one. Reach for this skill only when the user names it, or asks specifically
+> for headless dispatch or bubblewrap confinement — the two things it still does
+> that Herdr does not. Never pick it just because a task needs subagents.
+>
+> Two parts of it are **not** legacy and are still the shared implementation for
+> both skills: the developer-level ladder in `model-levels.json` with its
+> `levels` reader, and the `tokens` accounting reader. `/herdr-agents` calls
+> both.
 
 Dispatch work to the `opencode` CLI as subagents. Each task gets its own git
 worktree and branch, runs unattended against a configured model, and comes back
@@ -432,17 +448,28 @@ These are all observed on this machine, not guesses.
   in-flight agent branch can never be deleted out from under a run. Cleaning up
   is this skill's `cleanup` command.
 
-## Parallelism: one at a time
+## Parallelism: read it from the config
 
-**`--parallel` defaults to 1, and on this hardware it should stay there.** Each
-agent finishes before the next starts. The endpoint will *accept* concurrent
-sessions, but it is one local model on one machine — parallel agents contend for
-the same GPU rather than using idle capacity, so nothing finishes sooner and
-everything drifts toward its timeout, which at 1800s a task is where a run
-starts losing work outright. Raising it warns.
+**How many agents run at once is a config value, not a flag default and not a
+number in this file.** The upgraded endpoint serves three at a time; it used to
+serve one, and hardcoding either answer is what made that upgrade a code change
+instead of an edit. `dispatch` resolves it through
+`../../_lib/agents_config.py` and prints the value and where it came from:
 
-Budget the wall clock as the *sum* of the tasks: three at the measured ~900s is
-about 45 minutes. Background the dispatch and watch the log rather than blocking.
+```bash
+python3 ../../_lib/agents_config.py --project <project>
+```
+
+First match wins: `--parallel N`, then `$AGENTS_MAX_PARALLEL`, then the
+project's own `.claude/agents-config.json`, then the `projects` map in
+`~/.config/opencode/agents-config.json`, then that file's
+`max_parallel_agents`, then a built-in 3. To hold one project down while its
+tasks are large, give it an entry rather than passing a flag every time.
+
+Budget the wall clock as the sum of the tasks divided by the concurrency, and
+remember the divisor is a ceiling rather than a promise: nine tasks at ~900s,
+three at a time, is about 45 minutes if none of them stalls. Background the
+dispatch and watch the log rather than blocking.
 
 ## Troubleshooting
 

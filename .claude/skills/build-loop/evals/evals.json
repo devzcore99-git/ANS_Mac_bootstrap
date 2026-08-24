@@ -4,36 +4,39 @@
     {
       "id": 1,
       "prompt": "Build out CODE_StockNewsPuller from plans/stock-news-puller-PRD.md. Keep going until the tests pass.",
-      "expected_output": "Enters a worktree, reads the PRD, establishes a test command, writes a task plan whose entries each cite a PRD section, runs buildloop.py init, then loops build/test/fix dispatching one subagent per task. Stops before merging and asks.",
+      "expected_output": "Checks the herdr preconditions, works on a claude_ branch, reads the PRD, establishes a test command, writes the tests itself, writes a task plan whose entries each cite a PRD section and name a test_file, runs buildloop.py init, then loops build/test/fix dispatching one herdr agent per task, one at a time. Stops before merging to master and asks.",
       "files": [],
       "assertions": [
-        "Creates a git worktree before writing code",
+        "Verifies HERDR_ENV and the opencode integration before dispatching anything",
         "Runs the existing test suite once before dispatching any build agent",
+        "Writes each task's test itself rather than asking the agent to write it",
         "Every task in the plan JSON has a non-empty acceptance string naming a runnable check",
-        "Runs the full test command itself after subagents return, not only the agents' own reports",
+        "Dispatches agents sequentially rather than starting several at once",
+        "Runs the full test command itself after an agent settles, not only reading its transcript",
         "Does not merge to master or push without asking"
       ]
     },
     {
       "id": 2,
       "prompt": "implement the whole thing in CODE_PingWidget for me, spin up agents per task and dont stop to ask me every time something breaks",
-      "expected_output": "No PRD exists, so it writes a short spec to .buildloop/spec.md from the request, shows it, and proceeds. Iterates on failures without asking, up to 5 attempts per task, then stops.",
+      "expected_output": "No PRD exists, so it writes a short spec to .buildloop/spec.md from the request, shows it, and proceeds. Iterates on failures without asking, up to 5 attempts per task, then stops. Explains that the agents run one at a time, so the wall clock is the sum of the tasks.",
       "files": [],
       "assertions": [
         "Writes a spec file rather than blocking on the absence of a PRD",
         "Does not ask the user after an individual test failure",
         "Stops and reports when a task reaches 5 failed attempts",
-        "Commits each passing task separately on the worktree branch"
+        "Commits each passing task separately and merges it into the run branch before cutting the next worktree",
+        "Does not promise parallel agents or a wall clock based on the longest task"
       ]
     },
     {
       "id": 3,
-      "prompt": "Run the build loop on CODE_Youtube_Rater — it has no tests directory at all.",
+      "prompt": "Run the build loop on CODE_Youtube_Rater \u2014 it has no tests directory at all.",
       "expected_output": "Recognizes there is no verification gate, makes creating one the first task in the plan (add pytest to the manifest, create tests/), and only then builds features against it.",
       "files": [],
       "assertions": [
-        "Task T1 establishes the test runner rather than implementing a feature",
-        "--test-command passed to init is a command that exists after T1 lands",
+        "Creates the test runner itself before planning, rather than making it task T1 for an agent",
+        "--test-command passed to init is a command that exists before the first dispatch",
         "Does not declare the build complete on a project where the test command was never run successfully"
       ]
     },
@@ -47,21 +50,71 @@
         "Does not run `init --force`, which would discard attempt history",
         "Surfaces the stored last_failure text"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "build out CODE_Thing from its PRD, keep going till the tests pass",
+      "expected_output": "This session is not inside a Herdr pane, so there is no runner. Says so plainly, names the two options \u2014 relaunch Claude Code inside Herdr, or have Claude write the tasks directly \u2014 and stops rather than silently dispatching to something else or working around HERDR_ENV.",
+      "files": [],
+      "assertions": [
+        "Detects the missing Herdr pane before planning tasks",
+        "Does not attempt `herdr agent start` outside a pane",
+        "Stops and asks rather than choosing a different runner on the user's behalf"
+      ]
     }
   ],
   "trigger_queries": [
-    { "query": "Build out the PRD in plans/stock-news-puller-PRD.md until it works", "should_trigger": true },
-    { "query": "implement this project autonomously and fix the errors as they come up", "should_trigger": true },
-    { "query": "plan it, build it, test it, and keep looping until the whole thing is done", "should_trigger": true },
-    { "query": "spin up agents to build each piece of this backlog and verify each one", "should_trigger": true },
-    { "query": "work through the feature list on CODE_PingWidget until the suite is green", "should_trigger": true },
-    { "query": "take this spec and turn it into working tested code", "should_trigger": true },
-    { "query": "write me a PRD for a stock scanner", "should_trigger": false },
-    { "query": "commit and push this repo", "should_trigger": false },
-    { "query": "fix the IndexError in parse.py", "should_trigger": false },
-    { "query": "run the tests and tell me what fails", "should_trigger": false },
-    { "query": "check every 5 minutes whether the build finished", "should_trigger": false },
-    { "query": "review this project and tell me what I should improve", "should_trigger": false },
-    { "query": "scaffold a new project directory called CODE_Widget", "should_trigger": false }
+    {
+      "query": "Build out the PRD in plans/stock-news-puller-PRD.md until it works",
+      "should_trigger": true
+    },
+    {
+      "query": "implement this project autonomously and fix the errors as they come up",
+      "should_trigger": true
+    },
+    {
+      "query": "plan it, build it, test it, and keep looping until the whole thing is done",
+      "should_trigger": true
+    },
+    {
+      "query": "spin up agents to build each piece of this backlog and verify each one",
+      "should_trigger": true
+    },
+    {
+      "query": "work through the feature list on CODE_PingWidget until the suite is green",
+      "should_trigger": true
+    },
+    {
+      "query": "take this spec and turn it into working tested code",
+      "should_trigger": true
+    },
+    {
+      "query": "write me a PRD for a stock scanner",
+      "should_trigger": false
+    },
+    {
+      "query": "commit and push this repo",
+      "should_trigger": false
+    },
+    {
+      "query": "fix the IndexError in parse.py",
+      "should_trigger": false
+    },
+    {
+      "query": "run the tests and tell me what fails",
+      "should_trigger": false
+    },
+    {
+      "query": "check every 5 minutes whether the build finished",
+      "should_trigger": false
+    },
+    {
+      "query": "review this project and tell me what I should improve",
+      "should_trigger": false
+    },
+    {
+      "query": "scaffold a new project directory called CODE_Widget",
+      "should_trigger": false
+    }
   ]
 }

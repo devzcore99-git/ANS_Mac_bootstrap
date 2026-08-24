@@ -24,10 +24,17 @@ BRANCH_PREFIX = "opencode_"
 # 900 killed every one of three measured CODE_GitTracker tasks just short of
 # finishing (950-1008s each). Wall clock, not step count, is what binds.
 DEFAULT_TIMEOUT = 1800
-# One at a time. The endpoint serves a single local model on one machine, so
-# concurrent agents contend for the same GPU rather than using idle capacity —
-# they do not finish sooner, they all finish later and closer to the timeout.
-DEFAULT_PARALLEL = 1
+# How many agents may run at once is a property of the machine serving the
+# models, not of this script, so it is resolved from
+# ../../_lib/agents_config.py: an explicit --parallel, then
+# $AGENTS_MAX_PARALLEL, then the project's own .claude/agents-config.json, then
+# ~/.config/opencode/agents-config.json, then a built-in 3. Changing it is a
+# config edit, never a code edit.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "_lib"))
+try:
+    import agents_config
+except ImportError:                      # pragma: no cover - copied without _lib
+    agents_config = None
 DEFAULT_RETRIES = 2
 
 # Context budget. The local models are small; the window is the binding
@@ -438,6 +445,16 @@ def parse_agent_md(path: Path) -> tuple[str, str]:
         elif key == "description" and val:
             desc = val
     return mode, desc
+
+
+def resolve_parallel(project, override) -> dict:
+    """How many agents may run at once. Falls back to one agent if _lib is not
+    beside this skill, which is the safe direction to be wrong in."""
+    if agents_config is None:
+        return {"value": 1, "source": "_lib/agents_config.py not found",
+                "warning": "install the shared library beside this skill to "
+                           "use the configured concurrency"}
+    return agents_config.resolve(project, override)
 
 
 def cmd_levels(args: argparse.Namespace) -> int:
@@ -1248,11 +1265,11 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
                 EX_PREFLIGHT,
             )
 
-    parallel = max(1, args.parallel)
-    if parallel > 1:
-        say(f"warn: --parallel {parallel} runs {parallel} agents against one local "
-            "endpoint; on single-GPU hardware they contend and every task slows "
-            "toward its timeout. The default is 1 for that reason.")
+    resolved = resolve_parallel(args.repo, args.parallel)
+    parallel = max(1, resolved["value"])
+    say(f"running {parallel} agent(s) at a time (from {resolved['source']})")
+    if resolved["warning"]:
+        say(f"warn: {resolved['warning']}")
     # Streaming is on by default only when one agent can run at a time. Key off
     # how many actually run concurrently, not on --parallel alone: a single task
     # under an explicit --parallel 3 is still one agent, and should stream.
@@ -1564,16 +1581,17 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--levels-config", help=f"path to {LEVELS_FILENAME} (default: search order)")
     d.add_argument("--model", help="explicit provider/model, overriding --level")
     d.add_argument("--agent", help="opencode agent for tasks that name none")
-    d.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL,
-                   help=f"concurrent agents (default {DEFAULT_PARALLEL}; raising it "
-                        "contends for one local model and is rarely faster)")
+    d.add_argument("--parallel", type=int, default=None,
+                   help="concurrent agents for this run, overriding the "
+                        "configured value; see agents-config.json and "
+                        "../../_lib/agents_config.py for the resolution order")
     d.add_argument("--timeout", type=int, help=f"per-task seconds (default {DEFAULT_TIMEOUT})")
     d.add_argument("--retries", type=int, default=None,
                    help=f"retries for provider errors that produced no tokens "
                         f"(default {DEFAULT_RETRIES})")
     d.add_argument("--stream", dest="stream", action="store_true", default=None,
                    help="print each agent's tool calls and replies as they happen "
-                        "(default: on at --parallel 1, off above that)")
+                        "(default: on when one agent runs at a time, off above)")
     d.add_argument("--no-stream", dest="stream", action="store_false",
                    help="silence live progress; the per-task log is still written live")
     d.add_argument("--sandbox", action="store_true",
