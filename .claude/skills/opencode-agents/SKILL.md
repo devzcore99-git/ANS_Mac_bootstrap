@@ -225,8 +225,12 @@ python3 scripts/opencode_agents.py dispatch --tasks tasks.json --model ham51-2/q
 
 Both `dispatch` and `check` validate the id against `opencode models` and exit
 3 before any work starts, so a typo costs a second rather than a run of failed
-agents. Mixing models across a batch is fine — the endpoint serves one at a
-time regardless, so the choice moves quality, not throughput.
+agents.
+
+**Pick one model per batch.** The endpoint keeps a single model resident, so
+alternating between two makes it reload weights between tasks. It is also what
+the endpoint-blip retry usually absorbs — a sub-2s zero-token failure is a
+just-in-time model load seen from the client side.
 
 **Use `--sandbox` whenever the machine supports it.** It confines each agent
 with bubblewrap so the only writable paths are its own worktree and its own
@@ -296,6 +300,16 @@ different number and says nothing about headroom — it grows with step count
 even when every step stayed small.
 
 ### 5. Review, merge, clean up
+
+Peak context is reported per task while it runs. For what a run cost afterwards
+— including `/herdr-agents` runs, which have no stream to parse — read
+opencode's session ledger, split by model and runner with per-task detail:
+
+```bash
+python3 $SKILL_DIR/scripts/opencode_agents.py tokens --here --agents-only
+```
+
+See [references/token-accounting.md](references/token-accounting.md).
 
 ```bash
 python3 scripts/opencode_agents.py diff --task parser     # or omit --task for all
@@ -454,3 +468,4 @@ user asks.
 | [references/agent-files.md](references/agent-files.md) | Agent frontmatter fields: tools, temperature, model, permissions |
 | [references/sandboxing.md](references/sandboxing.md) | What `--sandbox` confines, what it does not, and why it refuses |
 | [references/context-budget.md](references/context-budget.md) | Measured window costs, attachment vs reading, compaction, sizing tasks |
+| [references/token-accounting.md](references/token-accounting.md) | The `tokens` command: what a run cost, for this skill and for `/herdr-agents` |
