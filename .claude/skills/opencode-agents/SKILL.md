@@ -35,9 +35,9 @@ Use `--project PATH` to target a repository other than the current directory.
 
 ## When this is the right tool
 
-Use it when the work splits into **independent, well-scoped tasks** that a
-smaller model can do — scaffolding modules, writing tests against a stated
-interface, mechanical refactors, boilerplate across many files.
+Use it when the work splits into **independent, well-scoped tasks** — scaffolding
+modules, writing tests against a stated interface, mechanical refactors,
+boilerplate across many files.
 
 Use `/herdr-agents` instead when you want to watch the agents work or take one
 over mid-task: it runs the same opencode agents in Herdr panes with authoritative
@@ -54,13 +54,19 @@ halves of one problem produce two incompatible halves.
 ### 1. Preflight
 
 ```bash
-python3 scripts/opencode_agents.py --project PATH check
+python3 scripts/opencode_agents.py --project PATH check --level senior
+python3 scripts/opencode_agents.py levels
 ```
 
-Reports the opencode version, available models, discovered agent definitions,
-and a `problems` list. Exit 3 means something will break — read `problems`
-before going further. Fix the problems, or pass around them (`--model`), then
-continue.
+`check` reports the opencode version, available models, discovered agent
+definitions, and a `problems` list. Exit 3 means something will break — read
+`problems` before going further. Fix the problems, or pass around them
+(`--level`, `--model`), then continue.
+
+`levels` prints the developer ladder — which model plays senior, mid, and
+junior, what each is good for, and whether the endpoint still serves it. Run it
+before choosing, rather than reciting model ids from memory: the ladder is a
+config file the owner edits, so what it says today is the answer.
 
 ### 2. Define the agent
 
@@ -94,7 +100,7 @@ JSON — an array of tasks, or an object with defaults plus `tasks`:
 
 ```json
 {
-  "model": "ham51-2/qwen/qwen3.5-9b",
+  "level": "senior",
   "agent": "builder",
   "tasks": [
     {
@@ -113,7 +119,10 @@ JSON — an array of tasks, or an object with defaults plus `tasks`:
 ```
 
 `id` becomes a branch name (`opencode_<id>`) and must be unique. Per-task
-`agent`, `model`, `timeout`, and `files` override or extend the defaults.
+`agent`, `level`, `model`, `timeout`, and `files` override or extend the
+defaults. `level` names a rung on the developer ladder — see
+[choosing the developer level](#choosing-the-developer-level) — and carries that
+level's model, timeout, and context budget with it.
 
 Write prompts as if to a competent stranger with no context: name the exact
 files, state the interface, and say what not to touch. A small local model
@@ -134,9 +143,11 @@ what decides whether the work comes back right. A task that fills its context
 does not fail. It gets vague, forgets the interface it was given, and re-reads
 files it already has, and none of that shows in the exit code.
 
-Measured against `ham51-2/qwen/qwen3.5-9b`: ~4,900 tokens of fixed overhead per
-step plus ~1,900 of growth, so a 128,000 budget is about **60 tool calls**. Most
-tasks are nowhere near it — the worst so far peaked at 55,842 over 27 steps.
+Measured against `ham51-2/qwen/qwen3.5-9b`, the junior rung: ~4,900 tokens of
+fixed overhead per step plus ~1,900 of growth, so a 128,000 budget is about **60
+tool calls**. Most tasks are nowhere near it — the worst so far peaked at 55,842
+over 27 steps. The rungs above carry a larger budget in `model-levels.json`, but
+that figure is provisional: only the junior one was measured.
 
 Four rules, in order of how much they buy:
 
@@ -214,43 +225,48 @@ Then run:
 python3 scripts/opencode_agents.py dispatch --tasks tasks.json --sandbox
 ```
 
-**Selecting the model.** `--model` overrides the task file's default for one
-run without editing it; a task naming its own `model` keeps it either way.
-Precedence: per-task `model` > `--model` > the file's top-level `model` > the
-`model` key in `~/.config/opencode/opencode.jsonc`.
+### Choosing the developer level
+
+The endpoint serves more than one model, and they are not interchangeable —
+they are **developers of different seniority**. Pick the rung the task deserves
+and start the harness with it; that decision is yours, not the user's to be
+asked about each time.
+
+Ask `levels` rather than remembering ids:
 
 ```bash
-python3 scripts/opencode_agents.py dispatch --tasks tasks.json --model ham51-2/qwen/qwen3.6-35b-a3b
+python3 scripts/opencode_agents.py levels
 ```
 
-Both `dispatch` and `check` validate the id against `opencode models` and exit
-3 before any work starts, so a typo costs a second rather than a run of failed
-agents.
+It prints each rung with its model, what it is for, and its default timeout and
+context budget, read from `model-levels.json` — a config file the owner edits,
+so what it says today is the answer. **Never paste a model id into a task file
+when a level names it.**
 
-**Pick one model per batch.** The endpoint keeps a single model resident, so
-alternating between two makes it reload weights between tasks. It is also what
-the endpoint-blip retry usually absorbs — a sub-2s zero-token failure is a
-just-in-time model load seen from the client side.
+| Level | Reach for it when |
+|-------|-------------------|
+| senior | correctness depends on an interface defined elsewhere; call sites must stay consistent; a wrong design costs more than the extra latency |
+| mid | one module against a spec you already wrote out — clear, self-contained, nothing to infer |
+| junior | mechanical and fully specified — rename, extract, add a docstring, scaffold a file whose shape the prompt dictates |
 
-**Use `--sandbox` whenever the machine supports it.** It confines each agent
-with bubblewrap so the only writable paths are its own worktree and its own
-state — everything else, including the project's `.git` and your home
-directory, is read-only, and an attempted write outside fails with an error the
-agent reports. Without it the worktree is isolation by convention only. It is
-Linux-only and needs `bwrap`; `check` reports availability, and `dispatch`
-exits 3 rather than quietly running unconfined. Read
-[references/sandboxing.md](references/sandboxing.md) for what it does and does
-not cover — notably, **the network is not isolated**.
+```bash
+python3 scripts/opencode_agents.py dispatch --tasks tasks.json --level senior --sandbox
+```
 
-Expect it to be unavailable inside a container: bubblewrap needs a user
-namespace, and `check` reports "cannot create a namespace here" when the
-container does not grant one. There is no workaround from inside — dispatch from
-the host, or accept unconfined agents and lean on the task-shape rules above.
+Sending a junior task to senior burns wall clock for nothing; sending a senior
+task to junior comes back green and wrong. The second is the expensive one, so a
+task between two rungs goes to the higher.
 
-Each task gets a worktree under `.opencode-agents/worktrees/<id>`, runs, and has
-its changes committed on `opencode_<id>`. Progress goes to stderr; the JSON
-result lands on stdout. Exit 1 means at least one task did not end in `done` or
-`no-changes`.
+`--model` still takes a raw id and overrides `--level`; per-task keys override
+both. `dispatch` and `check` validate the resolved id against `opencode models`
+and exit 3 before any work starts.
+
+**Pick one level per batch.** The endpoint keeps a single model resident, so
+alternating makes it reload weights between tasks — minutes, not seconds.
+`dispatch` warns when a batch names more than one; split it in two.
+
+Read [references/model-levels.md](references/model-levels.md) to add a model,
+to see which config location is in force, or for the full precedence order.
 
 ### Watching an agent work
 
@@ -432,7 +448,7 @@ about 45 minutes. Background the dispatch and watch the log rather than blocking
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `check` exits 3 on the model | Config default model is invalid | Pass `--model`, or fix `opencode.jsonc` |
+| `check` exits 3 on the model | Config default model is invalid | Pass `--level` (or `--model`), or fix `opencode.jsonc` |
 | Every task `transient` | Endpoint down, or `PWD` not set by a custom caller | Confirm the endpoint; use the script, not a hand-rolled spawn |
 | `agent_mismatch` | Wrong name, `mode: subagent`, or uncommitted agent file | Fix the file, commit it, re-dispatch |
 | `no-changes` | Prompt read as a question | Rewrite it as an imperative naming exact files |
@@ -463,9 +479,11 @@ user asks.
 
 | File | Purpose |
 | --- | --- |
-| `scripts/opencode_agents.py` | The dispatcher — check, dispatch, diff, merge, cleanup |
+| `scripts/opencode_agents.py` | The dispatcher — levels, check, dispatch, diff, merge, cleanup |
+| [model-levels.json](model-levels.json) | The developer ladder: which model is senior, mid, junior. The owner's copy at `~/.config/opencode/model-levels.json` wins over this one |
 | [assets/agent-template.md](assets/agent-template.md) | Starter opencode agent definition |
 | [references/agent-files.md](references/agent-files.md) | Agent frontmatter fields: tools, temperature, model, permissions |
 | [references/sandboxing.md](references/sandboxing.md) | What `--sandbox` confines, what it does not, and why it refuses |
+| [references/model-levels.md](references/model-levels.md) | The developer ladder: the schema, the four config locations, precedence, mixed batches |
 | [references/context-budget.md](references/context-budget.md) | Measured window costs, attachment vs reading, compaction, sizing tasks |
 | [references/token-accounting.md](references/token-accounting.md) | The `tokens` command: what a run cost, for this skill and for `/herdr-agents` |

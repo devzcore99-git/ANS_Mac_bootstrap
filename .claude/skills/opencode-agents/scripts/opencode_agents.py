@@ -40,6 +40,17 @@ DEFAULT_RETRIES = 2
 DEFAULT_CONTEXT_LIMIT = 128000
 CONTEXT_WARN_FRACTION = 0.75
 
+# Developer levels. Which local model plays senior / mid / junior lives in a
+# config file rather than here, so adding a model is one edit by the owner and
+# no change to this script or to either SKILL.md. See model-levels.json for the
+# schema and the search order; LEVELS_SOURCES is that order minus the two
+# overrides, most specific first.
+LEVELS_FILENAME = "model-levels.json"
+LEVELS_SOURCES = (
+    Path.home() / ".config" / "opencode" / LEVELS_FILENAME,
+    Path(__file__).resolve().parent.parent / LEVELS_FILENAME,
+)
+
 # Exit codes (documented in --help)
 EX_OK = 0
 EX_FAIL = 1          # one or more tasks failed
@@ -272,6 +283,95 @@ def wrap_in_sandbox(cmd: list[str], wt: Path, home: Path) -> list[str]:
     return args + cmd
 
 
+def levels_file(override: str | None = None) -> Path | None:
+    """First model-levels.json that exists, in documented precedence order."""
+    # An explicit override that does not exist is a mistake, not a reason to
+    # fall through to the next candidate and quietly run a different ladder —
+    # so these two are checked and rejected, never skipped.
+    if override:
+        path = Path(override).expanduser()
+        if not path.is_file():
+            die(f"Error: --levels-config path does not exist: {path}")
+        return path
+    env = os.environ.get("OPENCODE_MODEL_LEVELS")
+    if env:
+        path = Path(env).expanduser()
+        if not path.is_file():
+            die(f"Error: $OPENCODE_MODEL_LEVELS points at a missing file: {path}")
+        return path
+    for c in LEVELS_SOURCES:
+        if c.is_file():
+            return c
+    return None
+
+
+def load_levels(override: str | None = None) -> dict:
+    """The developer-level ladder: {"source", "default_level", "ladder"}.
+
+    `ladder` is ordered most capable first, as the file is — the array order IS
+    the ranking, so a model inserted in the right place needs no other edit.
+    Structural problems die here; a model id that is not in `opencode models`
+    does not, because that is a live-endpoint fact and `levels`/`check` report
+    it rather than blocking every command that touches the file.
+    """
+    path = levels_file(override)
+    if path is None:
+        return {"source": None, "default_level": None, "ladder": []}
+    try:
+        data = json.loads(strip_jsonc(path.read_text()))
+    except (json.JSONDecodeError, OSError) as exc:
+        die(f"Error: {path} is not readable as JSON: {exc}")
+    if not isinstance(data, dict) or not isinstance(data.get("levels"), list) or not data["levels"]:
+        die(
+            f'Error: {path} must be an object with a non-empty "levels" array,\n'
+            '       ordered most capable first. See the bundled model-levels.json.'
+        )
+
+    ladder: list[dict] = []
+    seen: set[str] = set()
+    for i, raw in enumerate(data["levels"]):
+        if not isinstance(raw, dict):
+            die(f"Error: {path}: levels[{i}] is not an object.")
+        name = str(raw.get("level") or "").strip().lower()
+        model = str(raw.get("model") or "").strip()
+        if not name or not model:
+            die(f'Error: {path}: levels[{i}] needs both "level" and "model".')
+        aliases = [str(a).strip().lower() for a in (raw.get("aliases") or []) if str(a).strip()]
+        for key in [name] + aliases:
+            if key in seen:
+                die(f"Error: {path}: {key!r} names more than one level.")
+            seen.add(key)
+        entry = dict(raw)
+        entry.update({
+            "level": name,
+            "model": model,
+            "aliases": aliases,
+            # Most capable first, so the top of the file is the top of the
+            # ladder; rank counts up from the junior end for readability.
+            "rank": len(data["levels"]) - i,
+        })
+        ladder.append(entry)
+
+    default = str(data.get("default_level") or "").strip().lower() or ladder[0]["level"]
+    if not any(default == e["level"] or default in e["aliases"] for e in ladder):
+        die(f"Error: {path}: default_level {default!r} is not one of the levels defined there.")
+    return {"source": str(path), "default_level": default, "ladder": ladder}
+
+
+def pick_level(name: str, levels: dict) -> dict:
+    """One ladder entry by level name or alias. Dies with the valid names."""
+    want = str(name).strip().lower()
+    for e in levels["ladder"]:
+        if want == e["level"] or want in e["aliases"]:
+            return e
+    known = ", ".join(
+        e["level"] + (f" ({'/'.join(e['aliases'])})" if e["aliases"] else "")
+        for e in levels["ladder"]
+    )
+    src = levels["source"] or "(no model-levels.json found)"
+    die(f"Error: unknown level {name!r}.\n       Defined in {src}: {known or '(none)'}")
+
+
 def list_models() -> list[str]:
     proc = run([opencode_bin(), "models"], timeout=60)
     if proc.returncode != 0:
@@ -340,12 +440,57 @@ def parse_agent_md(path: Path) -> tuple[str, str]:
     return mode, desc
 
 
+def cmd_levels(args: argparse.Namespace) -> int:
+    levels = load_levels(args.levels_config)
+    if not levels["ladder"]:
+        die(
+            "Error: no model-levels.json found. Looked at "
+            + ", ".join(str(c) for c in LEVELS_SOURCES),
+            EX_PREFLIGHT,
+        )
+    models = list_models()
+    problems: list[str] = []
+    ladder = []
+    for e in levels["ladder"]:
+        known = (e["model"] in models) if models else None
+        if known is False:
+            problems.append(
+                f"level {e['level']!r} names model {e['model']!r}, which is not in "
+                "`opencode models` — fix the id or drop the level."
+            )
+        ladder.append({
+            "level": e["level"],
+            "rank": e["rank"],
+            "aliases": e["aliases"],
+            "model": e["model"],
+            "available": known,
+            "summary": e.get("summary"),
+            "use_for": e.get("use_for", []),
+            "avoid_for": e.get("avoid_for", []),
+            "context_limit": e.get("context_limit"),
+            "timeout": e.get("timeout"),
+        })
+    if not models:
+        problems.append("`opencode models` returned nothing, so no id could be verified.")
+    emit({
+        "source": levels["source"],
+        "searched": [str(c) for c in LEVELS_SOURCES],
+        "default_level": levels["default_level"],
+        "ladder": ladder,
+        "problems": problems,
+        "ok": not problems,
+    })
+    return EX_OK if not problems else EX_PREFLIGHT
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     binary = opencode_bin()
     ver = run([binary, "--version"], timeout=60).stdout.strip()
     models = list_models()
     cfg_model, cfg_path = config_default_model()
+    levels = load_levels(args.levels_config)
+    level = pick_level(args.level, levels) if args.level else None
 
     problems: list[str] = []
     if not models:
@@ -356,7 +501,8 @@ def cmd_check(args: argparse.Namespace) -> int:
             f"Bare `opencode run` will fail. Always pass --model, or fix the config."
         )
 
-    chosen = args.model or (cfg_model if cfg_model in models else None)
+    chosen = args.model or (level["model"] if level else None) \
+        or (cfg_model if cfg_model in models else None)
     if not chosen and models:
         non_free = [m for m in models if not m.endswith("-free")]
         chosen = (non_free or models)[0]
@@ -377,6 +523,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         "project": str(project),
         "models": models,
         "config_default_model": cfg_model,
+        "levels_source": levels["source"],
+        "requested_level": level["level"] if level else None,
         "resolved_model": chosen,
         "agents": agents,
         "sandbox": sandbox,
@@ -1040,10 +1188,25 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
 
     models = list_models()
     cfg_model, _ = config_default_model()
-    model = args.model or defaults.get("model") or (cfg_model if cfg_model in models else None)
+    levels = load_levels(args.levels_config)
+
+    # Batch level. A level is a name for a model plus the timeout and context
+    # budget that suit it, so it can supply all three — but only where nothing
+    # more specific was given.
+    #   per-task model > per-task level > --model > --level > file model
+    #   > file level > the "model" key in opencode.jsonc
+    batch_level = None
+    if args.level:
+        batch_level = pick_level(args.level, levels)
+    elif not args.model and not defaults.get("model") and defaults.get("level"):
+        batch_level = pick_level(defaults["level"], levels)
+    model = (args.model or defaults.get("model")
+             or (batch_level["model"] if batch_level else None)
+             or (cfg_model if cfg_model in models else None))
     if not model:
         die(
-            "Error: no model resolved. Pass --model, or set \"model\" in the task file.\n"
+            "Error: no model resolved. Pass --level (see `levels`) or --model,\n"
+            '       or set "level" or "model" in the task file.\n'
             "       Available: " + (", ".join(models) if models else "(none — run `check`)"),
             EX_PREFLIGHT,
         )
@@ -1052,6 +1215,23 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             f"Error: model {model!r} is not available.\n       Available: " + ", ".join(models),
             EX_PREFLIGHT,
         )
+
+    # Per-task level, for the rare batch that mixes them. The endpoint keeps one
+    # model resident, so a mixed batch reloads weights between tasks — both
+    # SKILL.md files say pick one level per batch, and this exists to mirror the
+    # per-task "model" key that already did, not to encourage it.
+    for t in tasks:
+        if not t.get("level"):
+            continue
+        tl = pick_level(t["level"], levels)
+        t.setdefault("model", tl["model"])
+        if tl.get("timeout") and not t.get("timeout"):
+            t["timeout"] = tl["timeout"]
+    mixed = sorted({t["model"] for t in tasks if t.get("model") and t["model"] != model})
+    if mixed:
+        say("warn: this batch names more than one model (" + ", ".join([model] + mixed)
+            + "). The endpoint holds one resident, so it reloads weights between "
+            "tasks — minutes, not seconds. Split the batch instead.")
 
     base = args.base or git(["rev-parse", "HEAD"], cwd=project).stdout.strip()
     if not base:
@@ -1085,13 +1265,17 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
     cfg = {
         "model": model,
         "agent": args.agent or defaults.get("agent"),
-        "timeout": args.timeout or defaults.get("timeout") or DEFAULT_TIMEOUT,
+        "timeout": (args.timeout or defaults.get("timeout")
+                    or (batch_level.get("timeout") if batch_level else None)
+                    or DEFAULT_TIMEOUT),
         "retries": DEFAULT_RETRIES if args.retries is None else args.retries,
         "sandbox": sandbox,
         "stream": stream,
         "base": base,
         "context_limit": (args.context_limit or defaults.get("context_limit")
+                          or (batch_level.get("context_limit") if batch_level else None)
                           or DEFAULT_CONTEXT_LIMIT),
+        "level": batch_level["level"] if batch_level else None,
     }
 
     if args.dry_run:
@@ -1100,6 +1284,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             "would_dispatch": [
                 {"id": t["id"],
                  "agent": t.get("agent") or cfg["agent"],
+                 "model": t.get("model") or cfg["model"],
                  "branch": f"{BRANCH_PREFIX}{t['id']}",
                  "worktree": str(worktree_path(project, t["id"])),
                  "files": t.get("files") or [],
@@ -1110,7 +1295,8 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         return EX_OK
 
     ensure_excluded(project)
-    say(f"dispatching {len(tasks)} task(s), {parallel} at a time, model={model}, "
+    say(f"dispatching {len(tasks)} task(s), {parallel} at a time, "
+        f"level={cfg['level'] or '(none)'}, model={model}, "
         f"sandbox={'on' if sandbox else 'OFF'}, stream={'on' if stream else 'off'}")
 
     results: list[dict] = []
@@ -1133,6 +1319,7 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         state["tasks"][res["id"]] = res
     state["base"] = base
     state["model"] = model
+    state["level"] = cfg["level"]
     state["sandbox"] = sandbox
     save_state(project, state)
 
@@ -1296,7 +1483,7 @@ EPILOG = """\
 Task file (JSON) — an array, or an object with defaults plus "tasks":
 
   {
-    "model": "ham51-2/qwen/qwen3.5-9b",
+    "level": "senior",
     "agent": "builder",
     "tasks": [
       {"id": "parser", "prompt": "Implement src/parser.py ... Do not touch other files.",
@@ -1305,13 +1492,23 @@ Task file (JSON) — an array, or an object with defaults plus "tasks":
     ]
   }
 
+"level" names a developer level from model-levels.json (`levels` lists them) and
+carries that level's model, timeout, and context budget. Match it to the work,
+not to the batch size: senior for a task that has to hold an interface in its
+head, junior for a mechanical edit. "model" still takes a raw id and wins over a
+level. Precedence, most specific first:
+
+  per-task "model" > per-task "level" > --model > --level > file "model"
+  > file "level" > the "model" key in ~/.config/opencode/opencode.jsonc
+
 "files" attaches each path to the prompt, so the agent starts with the content
 instead of spending tool calls hunting for it — and cannot re-read it. Paths are
 relative to the project root and must be committed, since the agent works in a
 worktree checked out from HEAD.
 
 Typical run:
-  opencode_agents.py check --project .
+  opencode_agents.py levels
+  opencode_agents.py check --project . --level senior
   opencode_agents.py dispatch --tasks tasks.json --dry-run
   opencode_agents.py dispatch --tasks tasks.json --sandbox
   opencode_agents.py diff --task parser
@@ -1335,7 +1532,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     c = sub.add_parser("check", help="verify opencode, model, and agent definitions")
     c.add_argument("--model", help="model to validate instead of the config default")
+    c.add_argument("--level", help="developer level to validate instead (see `levels`)")
+    c.add_argument("--levels-config", help=f"path to {LEVELS_FILENAME} (default: search order)")
     c.set_defaults(func=cmd_check)
+
+    lv = sub.add_parser("levels", help="developer levels and the model each maps to")
+    lv.add_argument("--levels-config", help=f"path to {LEVELS_FILENAME} (default: search order)")
+    lv.set_defaults(func=cmd_levels)
 
     tk = sub.add_parser("tokens", help="token usage from opencode's session ledger")
     tk.add_argument("--since", type=int, metavar="DAYS",
@@ -1354,7 +1557,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("dispatch", help="run tasks as opencode agents, one worktree each")
     d.add_argument("--tasks", required=True, help="path to the JSON task file")
-    d.add_argument("--model", help="provider/model, e.g. ham51-2/qwen/qwen3.5-9b")
+    d.add_argument("--level", help="developer level for tasks that name none — senior, "
+                                   "mid, junior, or whatever model-levels.json defines "
+                                   "(see `levels`); also supplies that level's timeout "
+                                   "and context budget")
+    d.add_argument("--levels-config", help=f"path to {LEVELS_FILENAME} (default: search order)")
+    d.add_argument("--model", help="explicit provider/model, overriding --level")
     d.add_argument("--agent", help="opencode agent for tasks that name none")
     d.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL,
                    help=f"concurrent agents (default {DEFAULT_PARALLEL}; raising it "

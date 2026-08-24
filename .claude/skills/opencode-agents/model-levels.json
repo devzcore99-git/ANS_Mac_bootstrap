@@ -1,0 +1,91 @@
+{
+  // Which local model plays which developer level.
+  //
+  // /opencode-agents and /herdr-agents both read this file to decide what to
+  // start the harness with, so a task described as "senior work" resolves to a
+  // model id here rather than to one hardcoded in a SKILL.md. Adding a model is
+  // an edit to this file and nothing else.
+  //
+  // Read by:  opencode_agents.py levels
+  //           opencode_agents.py check    --level <name>
+  //           opencode_agents.py dispatch --level <name>
+  //           /herdr-agents, which passes the resolved id after `--` at agent start
+  //
+  // Search order — first file found wins, the rest are ignored:
+  //   1. --levels-config PATH
+  //   2. $OPENCODE_MODEL_LEVELS
+  //   3. ~/.config/opencode/model-levels.json     <- edit this one
+  //   4. this file, bundled with the skill
+  //
+  // (3) is the one to edit. It sits beside opencode.jsonc, where the provider
+  // and the model ids already live, so the endpoint's facts stay in one place
+  // and one edit reaches every project on the machine. (4) is the fallback that
+  // travels into a devpod, a clone, or a container, where ~/.config is not the
+  // host's — keep it as a sane default, not as your working copy.
+  //
+  // ORDER IS THE LADDER: most capable first. "one level down" and "escalate"
+  // mean a step along this array, so inserting a model in the right position is
+  // all that is needed — there is no rank field to keep in sync.
+  //
+  // Every `model` must be a real id from `opencode models`. Only ham51-2/* are
+  // the local endpoint; opencode/* is a hosted catalogue and does not belong
+  // on this ladder.
+
+  "default_level": "senior",
+
+  "levels": [
+    {
+      "level": "senior",
+      "aliases": ["sr", "senior-dev"],
+      "model": "ham51-2/qwen/qwen3.8-27b",
+      "summary": "27B dense. Senior developer: holds an interface in its head across several files.",
+      "use_for": [
+        "a module whose correctness depends on an interface defined elsewhere",
+        "refactors that must keep call sites consistent",
+        "anything where getting the design wrong is more expensive than the extra latency"
+      ],
+      "avoid_for": [
+        "mechanical edits a smaller model finishes in a third of the time"
+      ],
+      "context_limit": 160000,
+      "timeout": 2400
+    },
+    {
+      "level": "mid",
+      "aliases": ["middle", "mid-level"],
+      "model": "ham51-2/qwen/qwen3.6-35b-a3b",
+      "summary": "35B MoE, ~3B active. Mid-level developer: fast, competent on a well-stated task.",
+      "use_for": [
+        "one module against a spec you wrote out",
+        "tests written against an interface that is already fixed",
+        "the default when the task is clear and self-contained"
+      ],
+      "avoid_for": [
+        "work that has to infer an unstated contract from the codebase"
+      ],
+      "context_limit": 160000,
+      "timeout": 2400
+    },
+    {
+      "level": "junior",
+      "aliases": ["jr", "junior-dev"],
+      "model": "ham51-2/qwen/qwen3.5-9b",
+      "summary": "9B. Junior developer: the narrowest of the three, and the one every measurement in references/context-budget.md was taken against.",
+      "use_for": [
+        "mechanical, fully specified edits — rename, extract, add a docstring",
+        "scaffolding a file whose shape you dictated in the prompt"
+      ],
+      "avoid_for": [
+        "anything requiring judgement about how the change should be made",
+        "tasks that will exceed ~60 tool calls"
+      ],
+      // 128,000 is the only measured figure of the three: ~4,900 tokens of
+      // fixed overhead plus ~1.9K per step, so roughly 60 tool calls. The two
+      // above are provisional working budgets, not measurements — the endpoint
+      // declares 256,000 for both, but a declared window is not a useful
+      // reasoning span. Measure before raising them.
+      "context_limit": 128000,
+      "timeout": 1800
+    }
+  ]
+}

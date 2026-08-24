@@ -63,7 +63,7 @@ uncommitted work is invisible to every agent you start. Commit first.
 
 - [ ] Step 1: Shape the tasks — each names exact files and fits one module
 - [ ] Step 2: Create a worktree workspace per task — `worktree create` returns its IDs
-- [ ] Step 3: Start the agent — `agent start` returns `agent_status: idle`; `-- --model` picks the model
+- [ ] Step 3: Start the agent — `agent start` returns `agent_status: idle`; `-- --model` carries the developer level
 - [ ] Step 4: Prompt and wait — settles on `idle`/`done`, not `working`
 - [ ] Step 4a: If it runs long — separate a hung agent from a slow one
 - [ ] Step 5: Read the result — judge the diff, not the transcript
@@ -138,40 +138,59 @@ Returns once Herdr has confirmed opencode is present and ready — about 3
 seconds — with `agent_status: idle` and `interactive_ready: true`. Anything
 else means it did not start; read the error rather than prompting into the void.
 
-#### Choosing the model
+#### Choosing the developer level
 
-Everything after a bare `--` is passed to the `opencode` executable, so the
-model is selected there:
+The endpoint serves more than one model, and they are not interchangeable —
+they are **developers of different seniority**. Decide which rung the work
+deserves before starting the agent; that is your call, not the user's.
+
+Get the ladder from the config, not from memory. `/opencode-agents` ships the
+reader and both skills read the same file:
+
+```bash
+python3 ../opencode-agents/scripts/opencode_agents.py levels
+```
+
+Both skills sit side by side in every project's `.claude/skills/`, so that
+relative path holds; from elsewhere, point at the ASST_BBMax copy. Its bundled
+model-levels reference covers the schema and where the file lives. Adding a
+model is one edit there and **no change to this skill** — never paste an id in
+as though it were fixed.
+
+| Level | Reach for it when |
+|-------|-------------------|
+| senior | correctness depends on an interface defined elsewhere; call sites must stay consistent; a wrong design costs more than the extra latency |
+| mid | one module against a spec you already wrote out — clear, self-contained, nothing to infer |
+| junior | mechanical and fully specified — rename, extract, add a docstring, scaffold a file whose shape the prompt dictates |
+
+Sending a junior task to senior burns wall clock for nothing; sending a senior
+task to junior comes back green and wrong. A task between two rungs goes to the
+higher.
+
+Everything after a bare `--` reaches the `opencode` executable, so the resolved
+id is applied there:
 
 ```bash
 herdr agent start <id> --kind opencode --pane <pane-id> --timeout 60000 \
-  -- --model ham51-2/qwen/qwen3.6-35b-a3b
+  -- --model <the id the level resolved to>
 ```
 
-**Confirm it took effect before prompting.** The start result echoes the
-argv it used, and the TUI names the live model in its status line:
+**Confirm it took effect before prompting.** The start result echoes the argv it
+used, and the TUI names the live model in its status line:
 
 ```bash
 herdr agent read <id> --source visible | grep -i 'Build ·'
 ```
 
-Omit `--model` and opencode uses the `model` key in
-`~/.config/opencode/opencode.jsonc`. That default is a real choice, not a
-fallback — set it to whichever model you want unattended work on, and pass
-`--model` only to deviate.
+Omit `--model` and opencode falls back to the `model` key in
+`~/.config/opencode/opencode.jsonc` — one rung for every task, so pass it
+whenever the task deserves a different one. Only `ham51-2/*` ids are the local
+endpoint; the `opencode/*` ids are a hosted catalogue over the network, a
+different trust and latency story and not what this skill is for.
 
-`opencode models` lists the ids. Only the `ham51-2/*` entries are the local
-endpoint; the `opencode/*` ones are a hosted catalogue reached over the network,
-which is a different trust and latency story and not what this skill is for.
-
-Pick per task, not per run. A larger model earns its extra latency on work that
-has to hold an interface in its head; a smaller one is the better trade for
-mechanical edits, and its shorter window matters less there.
-
-**But pick one model per batch.** The endpoint keeps a single model resident and
-loads others on demand, so alternating between two makes it unload and reload
-weights between agents — minutes of wall clock, not seconds. Choosing per task
-is right when the batch is one task; across a batch, choose once.
+**Pick one level per batch.** The endpoint keeps a single model resident, so
+alternating makes it unload and reload weights between agents — minutes of wall
+clock, not seconds. Across a batch, choose once.
 
 Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among live agents. The
 name follows the pane's occupant and is cleared when that agent exits, so reuse
@@ -429,6 +448,6 @@ Stop and ask the user when:
 
 | Skill | Difference |
 | --- | --- |
-| `/opencode-agents` | Same model and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. Takes `--model` as a flag and per task in the task file, where this skill passes it through `--` at `agent start`. Also ships the `tokens` reader Step 6 uses |
+| `/opencode-agents` | Same model and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. Takes `--level`/`--model` as flags and per task in the task file, where this skill passes the resolved id through `--` at `agent start`. Also ships the shared developer ladder, its `levels` reader, and the `tokens` reader Step 6 uses |
 | `/commit2repo` | Merging and pushing a reviewed `herdr_*` branch |
 | `/projects-git-cleanup` | Sweeps `claude_*` and `worktree-*` only — never `herdr_*` |
