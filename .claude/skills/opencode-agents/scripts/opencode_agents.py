@@ -69,7 +69,7 @@ EX_PREFLIGHT = 3     # environment not usable (no opencode, bad model, dirty rep
 # that skill drives the TUI and so has no stream of its own to parse.
 #
 # Deliberately read-only everywhere below: this file also holds credentials
-# (see DEVCONTAINER/CLAUDE.md on why opencode gets no host mount), and it is
+# (see DEV-TEMPLATE/CLAUDE.md on why opencode gets no host mount), and it is
 # opencode's live WAL database, not ours to write.
 OPENCODE_DB = Path.home() / ".local/share/opencode/opencode.db"
 # One worktree per task is the contract in both skills, so the directory's last
