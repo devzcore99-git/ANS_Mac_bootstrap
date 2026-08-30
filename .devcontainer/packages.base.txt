@@ -28,12 +28,24 @@ apt:curl
 apt:ca-certificates
 apt:iproute2
 
-# Deliberately NOT here: opencode and herdr.
+# --- Secrets tooling -------------------------------------------------------
+# age is the encryption backend sops uses, and `age-keygen` is what makes the
+# key that ~/.config/sops is bound for (see mounts in devcontainer.json). It is
+# in the Ubuntu archives, so it is one line here rather than another pinned
+# download; Ubuntu keeps it patched, which a pin would not.
 #
-# Both are installed by postCreateCommand instead, and both should stay there.
-# opencode is pinned to an exact npm version and herdr is fetched as a release
-# asset with a verified SHA-256 for the container's architecture — check.sh
-# asserts both pins. Neither is expressible as a package line, and more to the
-# point both are deliberately NON-fatal (`|| echo`), so that an npm outage or a
-# GitHub hiccup costs the container a tool rather than costing it a create.
-# Moving them into this fail-closed file would silently reverse that decision.
+# sops itself is NOT here and cannot be: it is in no Ubuntu release. It is
+# installed by .devcontainer/install-sops.sh from a pinned GitHub release with a
+# verified SHA-256 per architecture, exactly like herdr below.
+apt:age
+
+# Deliberately NOT here: opencode, herdr, graphify and sops.
+#
+# All four are installed by postCreateCommand instead, and all four should stay
+# there. opencode is pinned to an exact npm version, graphify to an exact PyPI
+# version, and herdr and sops are fetched as release assets with a verified
+# SHA-256 for the container's architecture — check.sh asserts every one of those
+# pins. None is expressible as a package line, and more to the point all four
+# are deliberately NON-fatal (`|| echo`), so that an npm outage or a GitHub
+# hiccup costs the container a tool rather than costing it a create. Moving them
+# into this fail-closed file would silently reverse that decision.
