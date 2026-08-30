@@ -75,8 +75,9 @@
   //otherwise end up with a stray root-owned directory on the host and a
   //container whose credential helper silently has nothing to read.  Creating it
   //here turns that into an empty-but-correct mount, and leaves a real gh config
-  //untouched.
-  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env ${localEnv:HOME}/.config/devcontainer/opencode.json && mkdir -p ${localEnv:HOME}/.config/gh",
+  //untouched.  ~/.config/sops is created for exactly the same reason, for the
+  //readonly SOPS-keys bind further down.
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env ${localEnv:HOME}/.config/devcontainer/opencode.json && mkdir -p ${localEnv:HOME}/.config/gh ${localEnv:HOME}/.config/sops",
 
   //Mount Claude Configuration from guest container 1 time
   //Auth token will be stored in volume and shared with other Docker containers
@@ -117,6 +118,17 @@
   //container reading the old content until it is rebuilt.  Binding the
   //directory means the name is resolved on each open, so an edit lands.
   //
+  //SOPS keys come in the same way: ~/.config/sops on the host is bound at the
+  //SAME path inside, so `sops` and `age` find age/keys.txt where they already
+  //look and no SOPS_AGE_KEY_FILE is needed.  Readonly — decryption reads the
+  //key, and nothing in the container should be rewriting a machine's private
+  //keys.  The directory is bound rather than keys.txt alone, for the inode
+  //reason above and so a rotated/added key arrives without a rebuild.  Note
+  //this is a real private key inside the container: the same trust level as
+  //the mounted Claude Code credentials and gh token, not a lesser one.
+  //initializeCommand mkdir -p's it, so a machine without SOPS gets an empty
+  //directory instead of a root-owned one Docker invents.
+  //
   //llm.env being readable inside the container is not a new exposure: the
   //--env-file above already bakes its values into the container's environment,
   //so `env` shows them either way.
@@ -124,6 +136,7 @@
     "source=claude-code-config,target=/home/vscode/.claude,type=volume",
     "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly",
     "source=${localEnv:HOME}/.config/devcontainer,target=/home/vscode/.config/devcontainer,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/sops,target=/home/vscode/.config/sops,type=bind,readonly",
     //"source=${localWorkspaceFolder}/../DBX_StockData,target=/workspaces/DBX_StockData,type=bind"
   ],
 
@@ -282,6 +295,20 @@
   //files.pythonhosted.org are already in firewall-allow.base.txt, and
   //extraction and querying are local and offline.
   //
+  //sops is installed after that, by .devcontainer/install-sops.sh, and pairs
+  //with the readonly ~/.config/sops bind above and the `apt:age` line in
+  //packages.base.txt: age is the encryption backend and lives in the Ubuntu
+  //archives, sops is the editor and lives in no Ubuntu release, so it is
+  //fetched as a GitHub release asset and pinned by version AND by a SHA-256 per
+  //architecture, exactly like herdr.  A bump edits SOPS_VERSION and both
+  //digests together; check.sh asserts the pair.
+  //
+  //Also NOT on the fatal chain.  A container without sops can still do
+  //everything else; a container that fails to create can do nothing.  Nothing
+  //is added to the allow-list for it either: the download runs here, at create
+  //time, before postStartCommand raises the firewall, and local age
+  //encryption and decryption never leave the container.
+  //
   //setup.sh runs last, and is this project's own hook - the seam for anything
   //a package list cannot express: creating a venv and installing the project's
   //manifest into it, fixing permissions on a mounted directory, generating a
@@ -289,7 +316,7 @@
   //NOT on the fatal chain for the same reason opencode and herdr are not: a
   //broken project hook should cost the container its setup, said out loud in
   //the create log, rather than cost you the container.
-  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-graphify.sh || echo \"[postCreate] WARNING: graphify install failed; the container is otherwise ready. Re-run .devcontainer/install-graphify.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
+  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-graphify.sh || echo \"[postCreate] WARNING: graphify install failed; the container is otherwise ready. Re-run .devcontainer/install-graphify.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-sops.sh || echo \"[postCreate] WARNING: sops install failed; the container is otherwise ready. Re-run .devcontainer/install-sops.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
 
   //Two things on every start, in this order.
   //
