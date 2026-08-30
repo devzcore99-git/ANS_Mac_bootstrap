@@ -24,6 +24,7 @@
       "mas"
 
       "anomalyco/tap/opencode"
+      "age"             # file encryption; keys consumed by sops
       "audacious"
       "btop"
       "docker"          # CLI only; Docker Desktop cask ships its own in /usr/local/bin
@@ -31,6 +32,8 @@
       "nvtop"
       "python-tk@3.14"
       "rsync"           # newer than macOS's bundled openrsync
+      "sops"            # secrets encryption, age-backed
+      "uv"              # python tool runner; installs graphify (see home/default.nix)
 
       # gh deliberately NOT here — packages.nix declares it as a Nix package.
       # ripgrep likewise; it arrives as an opencode dependency.
