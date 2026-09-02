@@ -40,25 +40,23 @@ apt:iproute2
 apt:age
 
 # --- Shell niceties --------------------------------------------------------
-# neofetch prints the OS / kernel / CPU / memory summary beside an ASCII logo.
+# fastfetch prints the OS / kernel / CPU / memory summary beside an ASCII logo.
 #
-# It is here in place of fastfetch, which is what was actually asked for.
-# fastfetch is in no Ubuntu LTS archive - Launchpad has it from 25.04 (plucky)
-# onward, and the base image's moving :ubuntu tag is the LTS - so shipping it
-# would have meant a fourth pinned GitHub-release binary with a SHA-256 per
-# architecture and its own check.sh assertions, for a system-info banner. Do
-# NOT change this line to `apt:fastfetch` before that tag reaches an LTS that
-# carries it: in a fail-closed list, a package that does not exist aborts every
-# create.
+# This line was `apt:neofetch` until 2026-09-01, as a stand-in for fastfetch,
+# which was what was actually asked for but was in no Ubuntu LTS archive at the
+# time. That reversed itself: the base image's moving :ubuntu tag rolled to
+# 26.04 LTS, which carries fastfetch (2.57.x, universe, both architectures) and
+# does not package neofetch AT ALL - upstream archived it in April 2024 and it
+# was dropped from the archive after noble. In a fail-closed list a package that
+# does not exist aborts every create, which is exactly what it did, on every
+# project built from this template.
 #
-# Two caveats. Upstream neofetch was archived in April 2024 and noble packages
-# a 2021 release; it runs, it will not gain features, and `inxi` is the
-# maintained alternative in the same archive if detail matters more than the
-# logo. And a cosmetic tool in a fail-closed list can in principle cost a
-# create - accepted here because it is in noble's universe component for the
-# life of the LTS, and it joins the same apt transaction as the firewall
-# tooling above, which already requires the Ubuntu archives to be reachable.
-apt:neofetch
+# The lesson that outlives the swap: a cosmetic tool in a fail-closed list costs
+# creates when the distro moves under it, and the moving :ubuntu tag guarantees
+# the distro moves. If fastfetch ever leaves the archive the same way, delete
+# this line rather than reaching for a pinned GitHub binary - `inxi` is the
+# maintained alternative in the same archive, and no banner is worth a create.
+apt:fastfetch
 
 # Deliberately NOT here: opencode, herdr, graphify and sops.
 #
