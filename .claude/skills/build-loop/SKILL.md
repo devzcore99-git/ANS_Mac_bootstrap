@@ -3,7 +3,8 @@ name: build-loop
 description: >-
   Build a project to completion by looping plan → build → test → fix, with one
   herdr agent dispatched per task on the local model and a persistent state file
-  so a run survives the session. Takes a PRD from ASST_BBMax/plans/ when one exists. Use when the user
+  so a run survives the session. Takes its spec from the target project's own
+  PRD.md when one exists, falling back to ASST_BBMax/plans/. Use when the user
   wants to implement a spec or PRD, build out a project autonomously, work
   through a feature backlog until the tests pass, or keep iterating on failures
   without being asked each time — including phrasings like "build this until it
@@ -73,15 +74,31 @@ calls.
 
 ### Step 1: Establish the spec
 
-Prefer a PRD. Check `~/AI_Projects/ASST_BBMax/plans/` for one matching the
-project; a PRD's numbered requirements map straight onto tasks and are what the
-planning step leans on hardest.
+Prefer a PRD — its numbered requirements map straight onto tasks and are what
+the planning step leans on hardest. Look in two places, **in this order**:
 
-With no PRD, do not stop — write a short spec yourself from the user's request
-into `.buildloop/spec.md` in the target project: what it does, the functional
-requirements as a numbered list, and what is explicitly out of scope. Show it to
-the user in your next message. If the request is too vague to produce even that,
-recommend `/prd-builder` instead of guessing at requirements.
+1. **The target project itself**, which wins whenever it has one: `PRD.md` at
+   the project root, then `docs/PRD.md`, then any `*-PRD.md` at the root.
+2. **`~/AI_Projects/ASST_BBMax/plans/`**, for a file matching the project name.
+
+The project's own copy takes precedence because it is the one that travels: a
+devpod, a fresh clone, and a cloud run all see it, while `plans/` exists only
+in sessions that can reach ASST_BBMax. It is also versioned alongside the code
+it specifies, so it is the copy that stays true as the project changes.
+
+Two things follow from that ordering. **Never merge the two** — if both exist,
+read the project's and ignore the other, rather than combining requirements
+from two documents that may disagree. And **a file in `plans/` may be a
+pointer**: a PRD moved into its project can leave a short stub behind naming
+the new path. If what you find there is a pointer rather than requirements,
+follow it and read the file it names.
+
+With no PRD in either place, do not stop — write a short spec yourself from the
+user's request into `.buildloop/spec.md` in the target project: what it does,
+the functional requirements as a numbered list, and what is explicitly out of
+scope. Show it to the user in your next message. If the request is too vague to
+produce even that, recommend `/prd-builder` instead of guessing at
+requirements.
 
 ### Step 2: Establish the verification gate
 
@@ -163,7 +180,8 @@ python3 $SKILL_DIR/scripts/buildloop.py init \
   --project ~/AI_Projects/CODE_Thing \
   --tasks plan.json \
   --test-command 'python3 -m pytest -q' \
-  --spec ~/AI_Projects/ASST_BBMax/plans/thing-PRD.md
+  --spec PRD.md                                    # the project's own, preferred
+  --spec ~/AI_Projects/ASST_BBMax/plans/thing-PRD.md   # fallback
 ```
 
 `init` validates ids, required fields, and dependency references, and exits 3
