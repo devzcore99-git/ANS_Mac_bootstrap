@@ -71,11 +71,12 @@ uncommitted work is invisible to every agent you start. Commit first.
 
 - [ ] Step 1: Shape the tasks — each names exact files and fits one module
 - [ ] Step 2: Create a worktree workspace per task — `worktree create` returns its IDs
-- [ ] Step 3: Start the agent — `agent start` returns `agent_status: idle`; `-- --model` carries the developer level
+- [ ] Step 3: Start the agent — `agent start` returns `agent_status: idle`; `-- --agent` carries the level and its reasoning effort
 - [ ] Step 4: Prompt and wait — settles on `idle`/`done`, not `working`
 - [ ] Step 4a: If it runs long — separate a hung agent from a slow one
 - [ ] Step 5: Read the result — judge the diff, not the transcript
 - [ ] Step 6: Commit, review, merge, tear down — `worktree list` comes back empty
+- [ ] Step 7: Compact the session when major items are done (see [Session compaction](#session-compaction))
 
 ### Step 1: Shape the tasks
 
@@ -162,8 +163,8 @@ python3 ../opencode-agents/scripts/opencode_agents.py levels
 Both skills sit side by side in every project's `.claude/skills/`, so that
 relative path holds; from elsewhere, point at the ASST_BBMax copy. Its bundled
 model-levels reference covers the schema and where the file lives. Adding a
-model is one edit there and **no change to this skill** — never paste an id in
-as though it were fixed.
+model is one edit there and **no change to this skill** — never paste an id or
+an agent name in as though it were fixed.
 
 | Level | Reach for it when |
 |-------|-------------------|
@@ -175,12 +176,18 @@ Sending a junior task to senior burns wall clock for nothing; sending a senior
 task to junior comes back green and wrong. A task between two rungs goes to the
 higher.
 
-Everything after a bare `--` reaches the `opencode` executable, so the resolved
-id is applied there:
+`levels` also reports a **manager**, which is not a rung: same server-side model
+as senior on a shorter context cap, so "promoting" a task to it buys nothing and
+costs window. It is the seat that plans and dispatches — never a task agent.
+
+Everything after a bare `--` reaches the `opencode` executable. **Start the
+agent by its level's `agent` name, not by model id** — the agent name is what
+carries the reasoning effort, which is the whole reason this is not `--model`
+(see [Choosing the reasoning effort](#choosing-the-reasoning-effort)):
 
 ```bash
 herdr agent start <id> --kind opencode --pane <pane-id> --timeout 60000 \
-  -- --model <the id the level resolved to>
+  -- --auto --agent <the agent the level resolved to>
 ```
 
 **Confirm it took effect before prompting.** The start result echoes the argv it
@@ -190,17 +197,40 @@ used, and the TUI names the live model in its status line:
 herdr agent read <id> --source visible | grep -i 'Build ·'
 ```
 
-Omit `--model` and opencode falls back to the `model` key in
-`~/.config/opencode/opencode.jsonc` — one rung for every task, so pass it
-whenever the task deserves a different one. Only `ham51-2/*` ids are the local
-endpoint; the `opencode/*` ids are a hosted catalogue over the network, a
-different trust and latency story and not what this skill is for.
+Omit the flag and opencode falls back to the `model` key in
+`~/.config/opencode/opencode.jsonc` — the *manager*: the narrowest window on the
+endpoint, at no gain. Pass the level. Only `ham51/*` ids are the local endpoint;
+`opencode/*` is a hosted catalogue over the network, a different trust and
+latency story and not what this skill is for.
 
 **Pick one level per batch.** The endpoint keeps a single model resident, so
 alternating makes it unload and reload weights between agents — minutes of wall
 clock, not seconds. Across a batch, choose once. This binds harder now that
 several agents run at once: a batch at two levels thrashes the endpoint between
-them for its whole duration.
+them for its whole duration. Efforts within one level are free to vary — the
+`-dispatch` twins share a server-side model, so `senior` and `senior-low` never
+trade weights.
+
+#### Choosing the reasoning effort
+
+<a id="choosing-the-reasoning-effort"></a>Each rung has an effort dial — opencode
+calls it a **variant** — and `levels` names the rung's default plus the agent
+carrying each setting, under `variant` and `agents`. Take the default unless the task argues otherwise.
+
+**There is no `--variant` flag on this path.** It exists on `opencode run`, the
+*legacy* `/opencode-agents` runner; the TUI that `agent start` launches rejects it,
+so `-- --variant` is always a bug here. The effort comes from the agent definition
+instead — which is why Step 3 passes `--agent`:
+
+| Want | Start with |
+|------|------------|
+| the rung's default effort | `-- --agent senior` |
+| a specific effort | `-- --agent <the name under `agents`>` |
+| the junior rung | `-- --agent junior` — no variants declared, so no dial |
+
+Read `../opencode-agents/references/model-levels.md` before changing any of this:
+it carries the two traps that make the mechanism look broken, and the query that
+shows what effort actually ran.
 
 Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among live agents. The
 name follows the pane's occupant and is cleared when that agent exits, so reuse
@@ -390,6 +420,20 @@ All observed on this machine against herdr 0.8.0, not inferred.
   by convention only**; keep every prompt scoped to relative paths, and use
   `/opencode-agents` when confinement actually matters.
 
+- **The TUI rejects flags `opencode run` accepts, and the failure is
+  unreadable.** `-- --variant low` makes opencode print its help and exit;
+  `agent start` reports `timeout: timed out waiting for agent startup`, naming
+  neither the flag nor the reason. `herdr pane read <pane-id> --source visible`
+  shows the help text sitting there. Pass only flags bare `opencode --help`
+  lists.
+
+- **Reasoning effort is stored per model, machine-wide, and beats the agent
+  definition.** `~/.local/state/opencode/model.json` holds the variant last
+  picked in the TUI, and it silently outranks an agent's `variant` key. The
+  ladder's agents name `*-dispatch` model keys precisely so no interactive pick
+  ever lands on them — **never select one in the TUI**, and never repoint a
+  ladder agent at its plain twin to remove the "duplicate".
+
 - **Never start an agent with `pane run`.** Launching `opencode` yourself does
   not register an agent: `agent get <pane>` returns `agent_not_found`, `agent
   list` stays empty, and `agent prompt`, `agent wait`, and every lifecycle state
@@ -449,7 +493,30 @@ All observed on this machine against herdr 0.8.0, not inferred.
   confirm against the worktree diff, never against the state alone. If the
   provider instead accepts and never answers, the agent stays `working`
   indefinitely (observed for 20 minutes on a single-function task). Step 4a
-  separates that from a genuinely slow task.
+   separates that from a genuinely slow task.
+
+## Session compaction
+
+When the manager session has accumulated significant context — after a multi-task
+batch completes, after a `build-loop` round finishes, or whenever the conversation
+grows long enough that token cost is a concern — compact the session to discard
+older messages while preserving the conversation thread.
+
+```
+/compact
+```
+
+This runs the `opencode-session-compact` plugin which calls the `session/compact`
+method on the opencode server for the active session. The conversation continues
+but the older tokens are discarded. If you want to compact a different session:
+
+```
+/compact <sessionID>
+```
+
+Compact **after** the run is fully complete (all worktrees torn down, diffs reviewed,
+branches merged/pushed). Do not compact mid-run — you lose the ability to
+reference earlier agent output.
 
 ## Stop conditions
 
@@ -470,7 +537,7 @@ Stop and ask the user when:
 
 | Skill | Difference |
 | --- | --- |
-| `/opencode-agents` | **Legacy.** Same models and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. Use only on an explicit request. Still ships the shared developer ladder, its `levels` reader, and the `tokens` reader Step 6 uses — those are current, not legacy |
+| `/opencode-agents` | **Legacy.** Same models and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. It runs `opencode run`, so it takes `--model` and `--variant` directly and needs no agent definition — the one place the effort is a plain flag. Use only on an explicit request. Still ships the shared developer ladder, its `levels` reader, and the `tokens` reader Step 6 uses — those are current, not legacy |
 | `/build-loop` | Dispatches its per-task build agents through this skill |
 | `/build-loop-recommend-build` | The same, for every round of its outer loop |
 | `/commit2repo` | Merging and pushing a reviewed `herdr_*` branch |
