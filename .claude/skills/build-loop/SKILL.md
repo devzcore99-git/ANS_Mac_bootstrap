@@ -39,6 +39,8 @@ Two principles, and their two named exceptions:
   than guess:** the **Project-Sponsor** (Step 1), and the **initial architecture pass**
   (Step 3). Each is scoped to its own step below.
 
+The agent that started the build-loop skill is the Manager unless otherwise specified.
+
 **The Manager** — this session — is very token-conscious and delegates nearly everything:
 it orchestrates, forwards information between roles, makes escalation calls, and approves
 merges. It does not scope, design, code, or test. Those are herdr agents, one per role per
@@ -46,8 +48,39 @@ task: **Project-Sponsor** (what/why), **Architect** (architecture, specs, per-ta
 **Coder** (implement, senior/mid/junior), **Tester/QA** (run tests, report failures).
 Information flows through the Manager as the only hub.
 
+**The Manager also records the run's metrics.** On start, it captures the wall-clock time
+and project name as the baseline. Throughout the run, it tracks the number of agents used,
+their types, how long each ran, and how many tokens they consumed. It reports these metrics
+at the end of the build as part of the final report, giving a clear picture of the project's
+cost and duration.
+
+**The Manager allows ample time for agents to complete their work.** If an agent is slow,
+that is acceptable — quality is more important than speed. The Manager's concern is not
+speed but whether the agent is stuck: it watches for stalls, idle states, or repeated
+failures, and escalates when the agent has exhausted its attempts or cannot make progress.
+
+**The Manager tracks pending escalations and outstanding questions.** When one agent
+escalates to another — a Coder to the Architect on a design call, the Tester/QA raising
+a failure — the Manager records which agent is waiting and who owes the answer. It ensures
+the receiving agent gets the question promptly, and relays the answer back to the waiting
+agent as soon as it arrives. If the Manager notices an escalation that has gone unanswered
+for an unreasonably long time, it follows up with the receiving agent to unblock the team.
+
+**The Manager sends a progress report to the user approximately every 5 minutes.** The
+report includes: overall project status (which tasks are complete, in progress, pending),
+percent complete (tasks done / total tasks), and an agents usage summary — which agents are
+currently running, how long each has been active, and total tokens consumed so far. This
+keeps the user informed of build progress without requiring them to monitor individual agents.
+
+**The Manager never performs another agent's job.** It orchestrates, escalates, and reports —
+it does not write code, design, scope, or test. The Manager knows very little about coding
+and should rarely if ever attempt to perform a coding task. When a problem arises that no
+agent role can resolve, the Manager informs the user rather than stepping into a role.
+
 Every herdr agent is named by role and task, `(ROLE)-(TaskID)` — e.g. `Project-Sponsor`,
-`Architect`, `Coder-T1`, `Tester`, or `Architect-T4` when the Architect remediates T4.
+`Architect`, `SnrCoder-T1`, `MidCoder-T1`, `JrCoder-T1`, `Tester`, or `Architect-T4` when
+the Architect remediates T4. The Coder's level (senior / mid / junior) is part of the name
+and determines the `--agent` value at start.
 The name is the agent id and worktree label; the branch keeps the safe `herdr_` prefix
 (see [Gotchas](#gotchas)).
 
@@ -137,9 +170,9 @@ meaningless. Find the command that proves the build works:
 
 **The Coder never writes the test it is judged by.** The test *is* the loop's pass/fail signal,
 so a Coder that authors it grades its own homework and `pass` becomes meaningless. The
-**Architect specifies each task's test** (Step 3); the test is written and committed on the run
-branch before the task is dispatched; and the **Tester/QA runs it** (Step 4). A test that cannot
-be written yet is a task that is not specified yet.
+**Architect specifies each task's test** (Step 3) **and writes it** — it is authored and committed
+on the run branch before the task is dispatched. The **Tester/QA runs it** (Step 4). A test that
+cannot be written yet is a task that is not specified yet.
 
 Pass the result to `init` as `--test-command`; it is stored once and every later step reads it
 from the state file.
@@ -152,6 +185,13 @@ specifications including each task's test specification from Step 2; **assigns e
 level** — which portions a senior, a mid, a junior Coder takes (the key output the Manager
 delegates on); and produces `ARCHITECTURE.md` and `tasks.json` — the decomposition with exact
 file targets, inline interface contracts, the dependency graph, and a level per task.
+
+**The Architect designs for parallelism.** A team of Coders and a Tester/QA will execute
+the build, not a single developer. Breaking the work into several independent coding tasks
+that can be assigned concurrently is far more efficient than a single large task. The
+Architect should decompose the project into as many parallelizable tasks as practical,
+respecting real dependencies, so that multiple Coders can work simultaneously and the
+Tester can run the suite frequently.
 
 **Second autonomy exception, scoped to this initial pass:** a design decision that depends on a
 business or usage fact only the user holds (which users, what scale, which integrations) — the
@@ -233,9 +273,8 @@ and count the agents already running on that model; start it only if that model 
 slot. Different models run independently, so a `mid` and a `senior` task may be in flight together.
 File disjointness keeps the worktrees safe; the per-model budget keeps the endpoint from contending.
 
-**b. Dispatch the Coders.** Cut one worktree per task and start a Coder named `(Coder)-<Tid>` at
-the level the Architect assigned. Create each worktree at dispatch time, never up front, and merge
-a concurrent group before cutting the next:
+**b. Dispatch the Coders.** Cut one worktree per task and start a Coder named
+`(SnrCoder|MidCoder|JrCoder)-<Tid>` at the level the Architect assigned:
 
 ```bash
 python3 $SKILL_DIR/scripts/buildloop.py start --project <project> --id T1
@@ -270,9 +309,10 @@ answered in prose without writing a file is a prompt that read as a question; re
 imperative naming exact files and re-dispatch.
 
 **e. On failure, back to the Coder.** The Tester/QA sends the failure back to the owning Coder
-(`Coder-T1`); that is one back-and-forth. The Coder fixes against the *verbatim* failure and the
-Tester/QA re-runs. A failure inside two seconds having produced nothing is a transient endpoint
-blip, not a task failure; re-prompt without spending a back-and-forth.
+(`SnrCoder-T1`, `MidCoder-T1`, or `JrCoder-T1`); that is one back-and-forth. The Coder fixes
+against the *verbatim* failure and the Tester/QA re-runs. A failure inside two seconds having
+produced nothing is a transient endpoint blip, not a task failure; re-prompt without spending a
+back-and-forth.
 
 **f. Escalate, then break.** After the second back-and-forth on the same item, the Tester/QA
 escalates to the Architect; after the fifth loop, break. See [Escalation](#escalation).
@@ -284,10 +324,13 @@ the Manager controls the message and sees the diff first.
 git -C <worktree-path> diff --name-only            # contract check
 git -C <worktree-path> add -A
 git -C <worktree-path> commit -m 'feat: add config loader'
-git -C <project> merge --no-ff herdr_Coder-T1 -m 'merge Coder-T1'
+git -C <project> merge --no-ff herdr_<LEVEL>CODEr-T1 -m 'merge <LEVEL>CODEr-T1'
 herdr worktree remove --workspace <workspace-id>
 python3 $SKILL_DIR/scripts/buildloop.py pass --project <project> --id T1 --commit <sha>
 ```
+
+The commit message and branch name use the actual agent name (`herdr_SnrCoder-T1`,
+`herdr_MidCoder-T1`, `herdr_JrCoder-T1`), not a generic `herdr_Coder-<id>`.
 
 **The contract check is not optional.** If the commit touches the test file, or any file whose
 contents were pasted into the prompt as the interface, the Coder changed what it was supposed to

@@ -20,6 +20,12 @@ question — not a detail, a design call — do not guess and do not sit on it:
 state the question and the options you see. It goes to the Architect, who
 decides, and the decision comes back to you.
 
+If you believe a test contains an error or bug that prevents completion — it
+hangs, times out, or fails in a way that suggests a flaw in the test itself —
+state the problem and stop. Do not modify, skip, or weaken the test. The
+Architect will review it, advise on the correct direction, and that guidance
+comes back to you through the Manager.
+
 Expectations:
 - Implement the task in the named file(s). Touch no other file.
 - Match the interface exactly as given. Run the named test until it passes.

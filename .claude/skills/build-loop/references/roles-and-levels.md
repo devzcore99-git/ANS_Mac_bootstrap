@@ -199,6 +199,12 @@ and started at the level the Architect recommended for that task.
 - **Never write the test it is judged by.** The test is specified by the
   Architect (in `tasks.json`) and committed before dispatch. A Coder that edits
   the test is a contract violation, not a pass.
+- **If a test appears broken, escalate rather than modify it.** If a Coder
+  believes a test contains an error or bug that prevents completion — it hangs,
+  times out, or fails in a way that suggests a flaw in the test itself — the
+  Coder states the problem and stops. The Architect reviews the test, advises on
+  the correct direction, and the Manager relays that guidance back to the Coder.
+  The Coder never modifies, skips, or weakens a test to make it pass.
 - **Never edit the interface it conforms to.** The contract check in Step 4g
   catches this.
 
