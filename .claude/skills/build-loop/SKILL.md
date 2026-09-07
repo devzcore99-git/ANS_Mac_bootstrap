@@ -78,6 +78,14 @@ it does not write code, design, scope, or test. The Manager knows very little ab
 and should rarely if ever attempt to perform a coding task. When a problem arises that no
 agent role can resolve, the Manager informs the user rather than stepping into a role.
 
+**Before dispatching any task, the Manager verifies the required agents exist.** The coder
+levels (senior, mid, junior) may show `agent=None` / `model=None` in `model-levels.json` —
+this means the agents are not configured. The Manager must verify what opencode agents actually
+exist before starting any dispatch. Run `python3 ../opencode-agents/scripts/opencode_agents.py
+levels` to check. If the required `--agent` values (senior, mid, junior, tester, architect)
+are not configured, the build cannot proceed — stop and inform the user. Never guess agent
+names or fall back to a default model.
+
 Every herdr agent is named by role and task, `(ROLE)-(TaskID)` — e.g. `Project-Sponsor`,
 `Architect`, `SnrCoder-T1`, `MidCoder-T1`, `JrCoder-T1`, `Tester`, or `Architect-T4` when
 the Architect remediates T4. The Coder's level (senior / mid / junior) is part of the name
@@ -114,6 +122,11 @@ a report. It does **not** merge to `main`/`master` or push.
    task (pre-upgrade model — an order of magnitude, not a number). Divide by the concurrency
    the budget allows (config) and round up for the dependency chain. A ten-task plan, three
    at a time, is closer to an hour than ten minutes. Say so before starting.
+6. **Verify required opencode agents exist before starting.** Run `python3 ../opencode-agents/scripts/opencode_agents.py levels`
+   and confirm `senior`, `mid`, `junior`, `tester`, and `architect` all show a configured
+   `--agent` value (not `None`). The coder levels (senior/mid/junior) may show
+   `agent=None` / `model=None` in `model-levels.json` — this means they are not configured
+   and dispatch will fail. If any required agent is missing, stop and inform the user.
 
 Paths below use `$SKILL_DIR` — the base directory printed when this skill loads. It is not a
 real environment variable: substitute the printed path, or set it inline in the same command,
@@ -282,15 +295,20 @@ slot. Different models run independently, so a `mid` and a `senior` task may be 
 File disjointness keeps the worktrees safe; the per-model budget keeps the endpoint from contending.
 
 **b. Dispatch the Coders.** Cut one worktree per task and start a Coder named
-`(SnrCoder|MidCoder|JrCoder)-<Tid>` at the level the Architect assigned:
+`(SnrCoder|MidCoder|JrCoder)-<Tid>` at the level the Architect assigned.
+
+**The pane ID comes from the worktree create response, not generated.**
+`herdr worktree create` returns JSON; read `.result.root_pane.pane_id` from
+it and use that value verbatim in the `--pane` flag. Never invent a pane ID.
 
 ```bash
 python3 $SKILL_DIR/scripts/buildloop.py start --project <project> --id T1
 herdr worktree create --workspace "$HERDR_WORKSPACE_ID" \
-  --branch herdr_Coder-T1 --base claude_<run> --label Coder-T1 --no-focus
-herdr agent start Coder-T1 --kind opencode --pane <pane-id> --timeout 60000 \
+  --branch herdr_<LEVEL>CODEr-T1 --base claude_<run> --label <LEVEL>CODEr-T1 --no-focus
+# Parse the response: pane_id=$(echo "$WORKTREE_CREATE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['root_pane']['pane_id'])")
+herdr agent start <LEVEL>CODEr-T1 --kind opencode --pane <pane-id> --timeout 60000 \
   -- --auto --agent <the level the Architect assigned>
-herdr agent prompt Coder-T1 "<briefing from references/roles/coder.md> + <task body from references/agent-prompt.md>" \
+herdr agent prompt <LEVEL>CODEr-T1 "<briefing from references/roles/coder.md> + <task body from references/agent-prompt.md>" \
   --wait --timeout 1800000
 ```
 
@@ -303,9 +321,14 @@ Architect's seat.
 tree. It reports pass/fail per task with the *verbatim* failure text. It does not write code and
 does not write the tests it runs — those were specified in Step 2/3.
 
+**The pane ID comes from the worktree create response, not generated.**
+`herdr worktree create` returns JSON; read `.result.root_pane.pane_id` from
+it and use that value verbatim in the `--pane` flag. Never invent a pane ID.
+
 ```bash
 herdr worktree create --workspace "$HERDR_WORKSPACE_ID" \
   --branch herdr_Tester --base claude_<run> --label Tester --no-focus
+# Parse the response: pane_id=$(echo "$WORKTREE_CREATE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['root_pane']['pane_id'])")
 herdr agent start Tester --kind opencode --pane <pane-id> --timeout 60000 \
   -- --auto --agent tester
 herdr agent prompt Tester "Run the test suite for <Tid>. Report pass/fail with verbatim failures. Touch no other file." \

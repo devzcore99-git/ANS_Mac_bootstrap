@@ -174,9 +174,14 @@ implementation that cascades into other tasks.
 
 **Running the architect:**
 
+**The pane ID comes from the worktree create response, not generated.**
+`herdr worktree create` returns JSON; read `.result.root_pane.pane_id` from
+it and use that value verbatim in the `--pane` flag. Never invent a pane ID.
+
 ```bash
 herdr worktree create --workspace "$HERDR_WORKSPACE_ID" \
   --branch herdr_Architect --base HEAD --label Architect --no-focus
+# Parse the response: pane_id=$(echo "$WORKTREE_CREATE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['root_pane']['pane_id'])")
 herdr agent start Architect --kind opencode --pane <pane-id> --timeout 60000 \
   -- --auto --agent architect
 herdr agent prompt Architect "<scoped project text>\n\nProduce ARCHITECTURE.md and tasks.json. Assign each task a senior/mid/junior level. Touch no other file." \
@@ -246,8 +251,16 @@ the reasoning to analyze failure patterns but does not need the senior model
 because it does not write code.
 
 ```bash
+**Running the tester:**
+
+**The pane ID comes from the worktree create response, not generated.**
+`herdr worktree create` returns JSON; read `.result.root_pane.pane_id` from
+it and use that value verbatim in the `--pane` flag. Never invent a pane ID.
+
+```bash
 herdr worktree create --workspace "$HERDR_WORKSPACE_ID" \
   --branch herdr_Tester --base claude_<run> --label Tester --no-focus
+# Parse the response: pane_id=$(echo "$WORKTREE_CREATE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['root_pane']['pane_id'])")
 herdr agent start Tester --kind opencode --pane <pane-id> --timeout 60000 \
   -- --auto --agent tester
 herdr agent prompt Tester "Run the test suite for <Tid>. Report pass/fail with verbatim failures. Touch no other file." \
