@@ -1,0 +1,10 @@
+{
+  "_comment": "Build-loop run configuration. The Manager reads this before dispatching; values here override the defaults documented in SKILL.md. See references/roles-and-levels.md for the role-to-model-to-budget mapping.",
+  "agent_framework": "herdr",
+  "concurrency_budget": {
+    "qwen3.6-35b-a3b": 3,
+    "qwen3.8-27b": 2,
+    "qwen3.5-9b": 2
+  },
+  "auto_approve": true
+}

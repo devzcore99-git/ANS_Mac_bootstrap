@@ -1,5 +1,6 @@
 ---
 name: todo-list
+version: 1.0.0
 description: List the current project's TODOs from its TODOs.md as a table, filtered by section or status. Use when the user asks to see the TODO list, project TODOs, backlog, or what is outstanding.
 ---
 
@@ -14,11 +15,7 @@ for no gain.
 ## Run
 
 Paths below use `$SKILL_DIR` — the base directory printed when this skill
-loads. It is not a real environment variable: substitute the printed path, or
-set it inline in the same command (`SKILL_DIR=... python3 "$SKILL_DIR/..."`),
-because shell state does not persist between calls. This is what lets the
-commands run from any project, whether the skill lives in a repository or is
-symlinked into `~/.claude/skills/`.
+loads. Substitute the printed path or set it inline in the same command.
 
 ```bash
 # macOS / Linux

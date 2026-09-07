@@ -1,15 +1,19 @@
 ---
 name: build-loop
+version: 1.0.0
 description: >-
-  Build a project to completion by looping plan → build → test → fix, with one
-  herdr agent dispatched per task on the local model and a persistent state file
-  so a run survives the session. Takes its spec from the target project's own
-  PRD.md when one exists, falling back to ASST_BBMax/plans/. Use when the user
-  wants to implement a spec or PRD, build out a project autonomously, work
-  through a feature backlog until the tests pass, or keep iterating on failures
-  without being asked each time — including phrasings like "build this until it
-  works", "implement the whole thing", or "keep going until it's done". Not for
-  a single edit or one bug fix.
+  Build a project to completion by looping scope → design → build → test → fix,
+  with a role-based methodology: a token-conscious Manager orchestrates a
+  Project-Sponsor, an Architect, level-assigned Coders, and a Tester/QA — each a herdr
+  agent named (ROLE)-(TaskID). A persistent state file lets a run survive the
+  session. Escalates to the Architect after two back-and-forths and breaks the
+  loop after five. Takes its spec from the target project's own PRD.md when one
+  exists, falling back to ASST_BBMax/plans/. Use when the user wants to
+  implement a spec or PRD, build out a project autonomously, work through a
+  feature backlog until the tests pass, or keep iterating on failures without
+  being asked each time — including phrasings like "build this until it works",
+  "implement the whole thing", or "keep going until it's done". Not for a single
+  edit or one bug fix.
 metadata:
   archetype: workflow
   state_file: .buildloop/state.json
@@ -17,292 +21,313 @@ metadata:
 
 # Build Loop
 
-Drives a project from a spec to working, tested, committed code. You plan the
-work into verifiable tasks, dispatch one `/herdr-agents` agent per task, run the
-tests yourself, and loop fixes back in — up to a per-task attempt cap, then stop
-and ask.
+**The purpose of this skill is to make software without a human in the loop.**
+The Manager, the Project-Sponsor, the Architect, the Coders, and the Tester/QA
+are a self-sufficient team: they run until the build is done and the tests pass,
+and do not pause to ask the person for a decision they can make themselves.
 
-**`/herdr-agents` is the runner.** Read its SKILL.md before your first dispatch:
-it owns the preconditions, the worktree and pane mechanics, the developer ladder,
-hang detection, and the teardown. This file owns the loop around it. Two of its
-rules reshape the work here — an agent may never write the tests it is judged
-by, and there is no attachment mechanism, so everything the agent must conform
-to is pasted into the prompt.
+Two principles, and their two named exceptions:
 
-A finished run leaves: every task `done` in the state file, the project's full
-test suite passing from a clean tree, one commit per task on the run branch, no
-`herdr_*` worktrees or agents left alive, and a report. It does **not** merge to
-`main`/`master` or push.
+- **Escalate gating items to the agent who owns the decision, not to the human.**
+  A blocked agent hands the item to the role whose seat it is (a Coder stuck on a
+  design question goes to the Architect); the Manager routes it and does not sit on it.
+- **The receiving agent has the autonomy to decide and keep the loop turning** —
+  choose the lower-risk option, note the assumption in the spec or the diff, proceed.
+  It stops only at an **authorization boundary** (merge to `main`, push, spend money,
+  delete a branch) or when the escalation threshold in [Escalation](#escalation) is exhausted.
+- **Two seats break the autonomy rule, on purpose — they gather the user's answer rather
+  than guess:** the **Project-Sponsor** (Step 1), and the **initial architecture pass**
+  (Step 3). Each is scoped to its own step below.
+
+**The Manager** — this session — is very token-conscious and delegates nearly everything:
+it orchestrates, forwards information between roles, makes escalation calls, and approves
+merges. It does not scope, design, code, or test. Those are herdr agents, one per role per
+task: **Project-Sponsor** (what/why), **Architect** (architecture, specs, per-task level),
+**Coder** (implement, senior/mid/junior), **Tester/QA** (run tests, report failures).
+Information flows through the Manager as the only hub.
+
+Every herdr agent is named by role and task, `(ROLE)-(TaskID)` — e.g. `Project-Sponsor`,
+`Architect`, `Coder-T1`, `Tester`, or `Architect-T4` when the Architect remediates T4.
+The name is the agent id and worktree label; the branch keeps the safe `herdr_` prefix
+(see [Gotchas](#gotchas)).
+
+Read [references/roles-and-levels.md](references/roles-and-levels.md) before dispatching
+any role: it holds each role's contract, the developer ladder, the reasoning-effort variants,
+the escalation thresholds, and the loop's decision tables. **`/herdr-agents` is the runner** and owns the preconditions, worktree and
+pane mechanics, hang detection, and teardown — read its SKILL.md before your first dispatch.
+This file owns the loop around it.
+
+A finished run leaves: every task `done` in the state file, the full test suite passing from
+a clean tree, one commit per task on the run branch, no run worktrees or agents alive, and
+a report. It does **not** merge to `main`/`master` or push.
 
 ## Before you start
 
-1. **The project must already exist and be scaffolded.** This skill assumes a
-   git repo with its `README.md`/`CLAUDE.md`/`.gitignore` in place. If the
-   directory is missing or bare, stop and run `/project-bootstrap` first —
-   `buildloop.py init` refuses a non-repo and tells you the same thing.
-2. **Satisfy `/herdr-agents`' three preconditions**, in its order: this session
-   must be inside a Herdr pane (`HERDR_ENV=1`), `herdr integration status` must
-   show `opencode` as `current`, and the tree must be clean. Stop at the first
-   failure — none has a safe workaround. Outside a Herdr pane there is no runner
-   and no build loop; say so and let the user decide whether to relaunch inside
-   Herdr or to have Claude write the tasks directly instead.
-3. **Work on a `claude_` branch in the project directory, not an
-   `EnterWorktree` worktree.** Each task gets its own worktree from Herdr, cut
-   from this branch and merged back into it; a second layer of worktree only
-   confuses which tree the tests run in. Never build on `main`/`master`.
-4. **One repo per run.** A build loop targets a single project. Work spanning
-   two projects is two runs.
-5. **Budget the wall clock before promising anything.** The measured figure is
-   ~900s per task, taken against the pre-upgrade model, so treat it as an order
-   of magnitude rather than a number — divide by the configured concurrency and
-   round up for the dependency chain. A ten-task plan three at a time is closer
-   to an hour than to ten minutes. Say so before starting.
+1. **The project must already exist and be scaffolded** — a git repo with
+   `README.md`/`CLAUDE.md`/`.gitignore`. If missing or bare, run `/project-bootstrap`
+   first; `buildloop.py init` refuses a non-repo and says so.
+2. **Satisfy `/herdr-agents`' three preconditions, in its order:** inside a Herdr pane
+   (`HERDR_ENV=1`), `herdr integration status` shows `opencode` as `current`, and the tree
+   is clean. Stop at the first failure — outside a Herdr pane there is no runner and no loop;
+   say so and let the user decide whether to relaunch inside Herdr or have Claude write the
+   tasks directly.
+3. **Work on a `claude_` branch in the project directory, not an `EnterWorktree` worktree.**
+   Each task gets its own Herdr worktree cut from this branch and merged back into it; a
+   second worktree layer only confuses which tree the tests run in. Never build on
+   `main`/`master`.
+4. **One repo per run.** Work spanning two projects is two runs.
+5. **Budget the wall clock before promising anything.** The measured figure is ~900s per
+   task (pre-upgrade model — an order of magnitude, not a number). Divide by the concurrency
+   the budget allows (config) and round up for the dependency chain. A ten-task plan, three
+   at a time, is closer to an hour than ten minutes. Say so before starting.
 
-Paths below use `$SKILL_DIR` — the base directory printed when this skill
-loads. It is not a real environment variable: substitute the printed path, or
-set it inline in the same command, because shell state does not persist between
-calls.
+Paths below use `$SKILL_DIR` — the base directory printed when this skill loads. It is not a
+real environment variable: substitute the printed path, or set it inline in the same command,
+because shell state does not persist between calls.
 
 ## Workflow
 
-- [ ] Step 1: Establish the spec — a PRD path, or a written spec file
+- [ ] Step 1: Project-Sponsor identifies the scope — fills a PRD's gaps or gathers the user's answers
 - [ ] Step 2: Establish the verification gate — a test command that runs today
-- [ ] Step 3: Plan into tasks — `buildloop.py init` accepts the plan
+- [ ] Step 3: Architect devises the architecture — framework, specs, and per-task level assignment
 - [ ] Step 4: Loop build → test → fix until `next` reports nothing ready
 - [ ] Step 5: Final verification from a clean tree
 - [ ] Step 6: Report, then ask before merging or pushing
 
-### Step 1: Establish the spec
+### Step 1: Project-Sponsor identifies the scope
 
-Prefer a PRD — its numbered requirements map straight onto tasks and are what
-the planning step leans on hardest. Look in two places, **in this order**:
+Dispatch a **Project-Sponsor** (`Project-Sponsor`) to establish what is to be coded. It
+represents the business needs behind the technical solution — it owns *what* the project must
+do and *why*, not *how*. The Manager does not write the scope; it only forwards the result.
 
-1. **The target project itself**, which wins whenever it has one: `PRD.md` at
-   the project root, then `docs/PRD.md`, then any `*-PRD.md` at the root.
-2. **`~/AI_Projects/ASST_BBMax/plans/`**, for a file matching the project name.
+**Primary autonomy exception:** the Project-Sponsor does not resolve a business question
+against the requirements and guess — it **asks the user** and records the answer, so the
+Architect and Coders never build on an assumed business requirement.
 
-The project's own copy takes precedence because it is the one that travels: a
-devpod, a fresh clone, and a cloud run all see it, while `plans/` exists only
-in sessions that can reach ASST_BBMax. It is also versioned alongside the code
-it specifies, so it is the copy that stays true as the project changes.
+**With a PRD** — prefer one; its numbered requirements map straight onto tasks. Look in two
+places, **in this order**: (1) the target project itself, which wins — `PRD.md` at the root,
+then `docs/PRD.md`, then any `*-PRD.md`; (2) `~/AI_Projects/ASST_BBMax/plans/`, for a file
+matching the project name. The project's copy travels (devpod, fresh clone, cloud run);
+`plans/` only exists where ASST_BBMax is reachable. **Never merge the two** — if both exist,
+read the project's and ignore the other. A `plans/` file may be a pointer to a PRD moved into
+its project; if so, follow it.
 
-Two things follow from that ordering. **Never merge the two** — if both exist,
-read the project's and ignore the other, rather than combining requirements
-from two documents that may disagree. And **a file in `plans/` may be a
-pointer**: a PRD moved into its project can leave a short stub behind naming
-the new path. If what you find there is a pointer rather than requirements,
-follow it and read the file it names.
+The Project-Sponsor reads the PRD and **populates the missing questions it needs** — any
+vague requirement, any decision the PRD does not make, any interface it cannot infer — and
+returns the completed scope to the Manager, which records it in `.buildloop/spec.md`.
 
-With no PRD in either place, do not stop — write a short spec yourself from the
-user's request into `.buildloop/spec.md` in the target project: what it does,
-the functional requirements as a numbered list, and what is explicitly out of
-scope. Show it to the user in your next message. If the request is too vague to
-produce even that, recommend `/prd-builder` instead of guessing at
-requirements.
+**Without a PRD**, it **asks the user every question it needs before moving forward** — what
+the project does, the functional requirements as a numbered list, and what is explicitly out of
+scope — and returns them; the Manager records them in `.buildloop/spec.md` and shows them to
+the user. It does not guess. If the request is too vague to scope at all, recommend
+`/prd-builder` instead of guessing at requirements.
 
 ### Step 2: Establish the verification gate
 
-This is the step most likely to be skipped, and skipping it makes the rest of
-the loop meaningless. Find the command that proves the build works:
+This is the step most likely to be skipped, and skipping it makes the rest of the loop
+meaningless. Find the command that proves the build works:
 
-1. Look for an existing runner — `tests/`, `pytest.ini`, a `[tool.pytest]`
-   section in `pyproject.toml`, a `test` script in `package.json`, a `Makefile`
-   target.
-2. Run it *before* building anything, and record what it prints. A suite that
-   is already red gives you a baseline; discovering that after a build agent
-   runs wastes an attempt on a failure it did not cause.
-3. **If there is no runner, create it yourself before planning** — not as a
-   task. Most workspace projects have no `tests/` directory, so this is the
-   common case. For Python, add `pytest` to the project's dependency manifest,
-   create `tests/`, and make the gate `python3 -m pytest -q`.
+1. Look for an existing runner — `tests/`, `pytest.ini`, a `[tool.pytest]` section in
+   `pyproject.toml`, a `test` script in `package.json`, a `Makefile` target.
+2. Run it *before* building anything and record what it prints. A suite already red gives a
+   baseline; discovering that after a Coder runs wastes an attempt on a failure it did not cause.
+3. **If there is no runner, create it before planning — not as a task.** Most workspace projects
+   have no `tests/` directory, so this is the common case. For Python: add `pytest` to the
+   dependency manifest, create `tests/`, and make the gate `python3 -m pytest -q`.
 
-**You write the tests, not the agents.** `/herdr-agents` forbids an agent
-writing the tests it is judged by, and the reason is sharper here than anywhere
-else in this workflow: the test *is* the loop's pass/fail signal, so an agent
-that authors it is grading its own homework and `pass` becomes meaningless.
-Write each task's test before dispatching that task, commit it on the run
-branch, and paste it into the prompt. A test you cannot write yet is a task that
-is not specified yet.
+**The Coder never writes the test it is judged by.** The test *is* the loop's pass/fail signal,
+so a Coder that authors it grades its own homework and `pass` becomes meaningless. The
+**Architect specifies each task's test** (Step 3); the test is written and committed on the run
+branch before the task is dispatched; and the **Tester/QA runs it** (Step 4). A test that cannot
+be written yet is a task that is not specified yet.
 
-Pass the result to `init` as `--test-command`. It is stored once and every later
-step reads it from the state file.
+Pass the result to `init` as `--test-command`; it is stored once and every later step reads it
+from the state file.
 
-### Step 3: Plan into tasks
+### Step 3: Architect devises the architecture
 
-Decompose the spec into tasks that are each **independently verifiable**. Task
-sizing rules, in priority order:
+Dispatch an **Architect** (`Architect`) with the scoped project from Step 1. The Architect:
+reviews the PRD or scoped input; devises the architecture and framework; defines the technical
+specifications including each task's test specification from Step 2; **assigns each piece a
+level** — which portions a senior, a mid, a junior Coder takes (the key output the Manager
+delegates on); and produces `ARCHITECTURE.md` and `tasks.json` — the decomposition with exact
+file targets, inline interface contracts, the dependency graph, and a level per task.
+
+**Second autonomy exception, scoped to this initial pass:** a design decision that depends on a
+business or usage fact only the user holds (which users, what scale, which integrations) — the
+Architect raises it, the Manager carries it to the user, and the answer is folded in before the
+architecture is finalized. Once `ARCHITECTURE.md` and `tasks.json` are set, the Architect
+remediates autonomously under the normal rule and does not reopen business questions.
+
+Task sizing rules the Architect applies, in priority order:
 
 - One task covers **one requirement**, and names it in `requirement`.
-- A task touches **1–3 source files**, and names the test file that judges it in
-  `test_file`. That test is already written and committed by the time the task
-  is dispatched.
-- **Size it to one module, and state the interface in full.** These are local
-  models, and the context budget in `/opencode-agents`' reference was measured
-  against the junior rung — the ladder runs to 27B now, so check
-  `context_limit` for the level you chose rather than assuming the old figure.
-  Either way the window binds before the coding ability does. A task that begins
-  "find where…" is the wrong shape — find it yourself and name the file.
+- A task touches **1–3 source files**, and names the test file that judges it in `test_file` —
+  already written and committed by dispatch time.
+- **Size it to one module, and state the interface in full.** These are local models and the
+  context window binds before the coding ability does; a task that begins "find where…" is the
+  wrong shape — name the file.
 - `acceptance` must be checkable by running something, not by reading the code.
-  "`parse()` returns `[]` for an empty file; `pytest tests/test_parse.py` passes"
-  is acceptance. "Parsing works correctly" is not.
-- `depends_on` only for real ordering constraints. Over-declaring serializes a
-  run that could have gone wide, and it also decides the order tasks are cut
-  from the branch — which is what makes a dependency's code visible to the task
-  that needs it.
+- `depends_on` only for real ordering constraints. Over-declaring serializes a run that could
+  have gone wide, and it also decides the order tasks are cut — which is what makes a dependency's
+  code visible to the task that needs it.
 
-Write the plan to a JSON file, then hand it over:
-
-```json
-[
-  {
-    "id": "T1",
-    "title": "Config loader with defaults",
-    "requirement": "PRD 3.1",
-    "files": ["src/config.py"],
-    "test_file": "tests/test_config.py",
-    "depends_on": [],
-    "acceptance": "load_config() returns defaults when the file is absent; pytest tests/test_config.py passes"
-  },
-  {
-    "id": "T2",
-    "title": "CLI wiring",
-    "requirement": "PRD 4",
-    "files": ["src/cli.py"],
-    "test_file": "tests/test_cli.py",
-    "depends_on": ["T1"],
-    "acceptance": "python3 -m src.cli --help exits 0 and lists --config"
-  }
-]
-```
+The Manager takes `tasks.json` and hands it to `init`:
 
 ```bash
 python3 $SKILL_DIR/scripts/buildloop.py init \
   --project ~/AI_Projects/CODE_Thing \
-  --tasks plan.json \
+  --tasks tasks.json \
   --test-command 'python3 -m pytest -q' \
-  --spec PRD.md                                    # the project's own, preferred
-  --spec ~/AI_Projects/ASST_BBMax/plans/thing-PRD.md   # fallback
+  --spec .buildloop/spec.md
 ```
 
-`init` validates ids, required fields, and dependency references, and exits 3
-rather than overwriting an existing run. It stores a known set of fields and
-drops anything else, so a key it has not been taught is silently lost —
-`test_file` is stored, and `next` returns it with each task. Show the user the
-task list before building: not as an approval gate, but so a wrong decomposition
-is caught in the cheapest place.
+`init` validates ids, required fields, and dependency references, and exits 3 rather than
+overwriting an existing run. It stores a known set of fields and drops anything else. Show the
+user the task list and the Architect's level assignments before building — not as an approval
+gate, but so a wrong decomposition is caught in the cheapest place.
 
-**Choose one developer level for the whole plan**, from
-`/herdr-agents`' ladder — read it with
-`python3 ../opencode-agents/scripts/opencode_agents.py levels`, never from
-memory. The endpoint keeps one model resident, so alternating levels between
-tasks unloads and reloads weights and costs minutes per switch. Most build-loop
-tasks are `mid`; a task whose correctness depends on an interface defined
-elsewhere pulls the whole batch up to `senior`.
+**Get the ladder from the config, not from memory:**
+
+```bash
+python3 ../opencode-agents/scripts/opencode_agents.py levels
+```
+
+The endpoint keeps one model resident, so a batch at two levels thrashes it between them — group
+the Architect's assignments by level and run each level's batch together.
 
 ### Step 4: The loop
 
 Repeat until `next` exits 5.
 
-**a. Ask what is runnable.**
+**Dispatch through the configured framework, with the configured auto-approve.** Read
+`config/buildloop.json` before dispatching. `agent_framework` picks the runner: `herdr` (default,
+via `/herdr-agents`) or `opencode` (headless, via `/opencode-agents`) — roles, briefings, budget,
+and escalation are unchanged, only the runner differs. `auto_approve` decides permission prompts:
+when **true**, add `--auto` to every `herdr agent start` so the agent auto-approves commands
+without prompting; when **false**, omit it and the agent asks before each command. (`--auto`
+auto-approves everything except an explicit `permission: deny`, which still blocks — see
+`/opencode-agents`.) The command examples below assume `auto_approve: true`; drop `--auto` from
+each `herdr agent start` when it is `false`.
+
+**No attachment mechanism.** The runner types text into the TUI, so anything an agent must conform
+to — the interface, the test, the contract — must be pasted inline in the prompt; never point an
+agent at a spec, PRD, or design document.
+
+Read [references/agent-prompt.md](references/agent-prompt.md) before writing your first task prompt,
+and again before any re-prompt after a failure — it holds both templates and the four properties that
+decide whether a task comes back written or comes back as prose.
+
+**a. Ask what is runnable.** The Manager asks the state file, never the Architect, for the next work:
 
 ```bash
 python3 $SKILL_DIR/scripts/buildloop.py next --project <project>
 ```
 
-Returns a `batch` of tasks whose dependencies are satisfied and whose file lists
-do not overlap. Take the batch as given; do not add the `deferred` ids to it.
-**Run at most the configured number of agents at once** — read it, never assume:
-`python3 $SKILL_DIR/../_lib/agents_config.py --project <project>`. File
-disjointness is what makes running several together safe; the config value is
-what keeps them from contending.
+Returns a `batch` of tasks whose dependencies are satisfied and whose file lists do not overlap.
+Take the batch as given; do not add the `deferred` ids to it.
 
-**b. Dispatch the batch through `/herdr-agents` steps 2–5**, up to the
-configured concurrency, marking each task started as it goes. Cut every worktree
-from the **run branch**, not from a fixed `HEAD` captured earlier:
+**Respect the concurrency budget.** It is per model, in `config/buildloop.json`. Before starting a
+task, map its level to a model (per [references/roles-and-levels.md](references/roles-and-levels.md))
+and count the agents already running on that model; start it only if that model still has a free
+slot. Different models run independently, so a `mid` and a `senior` task may be in flight together.
+File disjointness keeps the worktrees safe; the per-model budget keeps the endpoint from contending.
+
+**b. Dispatch the Coders.** Cut one worktree per task and start a Coder named `(Coder)-<Tid>` at
+the level the Architect assigned. Create each worktree at dispatch time, never up front, and merge
+a concurrent group before cutting the next:
 
 ```bash
 python3 $SKILL_DIR/scripts/buildloop.py start --project <project> --id T1
 herdr worktree create --workspace "$HERDR_WORKSPACE_ID" \
-  --branch herdr_t1 --base claude_<run> --label t1 --no-focus
-herdr agent start t1 --kind opencode --pane <pane-id> --timeout 60000 \
-  -- --model <the id the level resolved to>
-herdr agent prompt t1 "<the prompt from references/agent-prompt.md>" \
+  --branch herdr_Coder-T1 --base claude_<run> --label Coder-T1 --no-focus
+herdr agent start Coder-T1 --kind opencode --pane <pane-id> --timeout 60000 \
+  -- --auto --agent <the level the Architect assigned>
+herdr agent prompt Coder-T1 "<briefing from references/roles/coder.md> + <task body from references/agent-prompt.md>" \
   --wait --timeout 1800000
 ```
 
-**Create each worktree at dispatch time, never up front**, and merge a
-concurrent group before cutting the next. See the Gotchas for why.
+**c. Coder questions.** A design question goes to the Architect; a mechanical question the Manager
+answers from the scoped spec; the Manager relays the answer back. The Coder never blocks on a
+question it can escalate, and the Manager never answers a design question itself — that is the
+Architect's seat.
 
-**c. Verify against the worktree, then run the test command yourself.** In
-order: the diff is non-empty, it touches only the task's files, then the full
-suite. Never accept the transcript as the result — see the Gotchas on `idle`.
+**d. Tester/QA verifies.** Dispatch a **Tester/QA** (`Tester`) to run the suite against the merged
+tree. It reports pass/fail per task with the *verbatim* failure text. It does not write code and
+does not write the tests it runs — those were specified in Step 2/3.
 
 ```bash
-git -C <worktree-path> status --porcelain          # did it write anything?
-git -C <worktree-path> diff --stat                 # what, exactly?
+herdr worktree create --workspace "$HERDR_WORKSPACE_ID" \
+  --branch herdr_Tester --base claude_<run> --label Tester --no-focus
+herdr agent start Tester --kind opencode --pane <pane-id> --timeout 60000 \
+  -- --auto --agent tester
+herdr agent prompt Tester "Run the test suite for <Tid>. Report pass/fail with verbatim failures. Touch no other file." \
+  --wait --timeout 2400000
 ```
 
-An agent that answered in prose without writing a file is a prompt that read as
-a question. Rewrite it as an imperative naming exact files and re-dispatch; that
-is a prompt defect, not a task failure, so do not spend a `fail` attempt on it.
+Never accept the Coder's transcript as the result — see the Gotchas on `idle`. An agent that
+answered in prose without writing a file is a prompt that read as a question; rewrite it as an
+imperative naming exact files and re-dispatch.
 
-**d. Record the outcome.**
+**e. On failure, back to the Coder.** The Tester/QA sends the failure back to the owning Coder
+(`Coder-T1`); that is one back-and-forth. The Coder fixes against the *verbatim* failure and the
+Tester/QA re-runs. A failure inside two seconds having produced nothing is a transient endpoint
+blip, not a task failure; re-prompt without spending a back-and-forth.
 
-```bash
-# green
-python3 $SKILL_DIR/scripts/buildloop.py pass --project <project> --id T1 --commit <sha>
-# red
-python3 $SKILL_DIR/scripts/buildloop.py fail --project <project> --id T1 \
-  --reason 'test_defaults: AssertionError, expected {} got None'
-```
+**f. Escalate, then break.** After the second back-and-forth on the same item, the Tester/QA
+escalates to the Architect; after the fifth loop, break. See [Escalation](#escalation).
 
-`fail` increments the attempt counter and prints `attempts_remaining`. On the
-5th failure it exits **4**, marks the task `blocked`, and tells you to stop.
-Honour that — do not retry a blocked task.
-
-**e. On failure, re-prompt the same agent** with the *verbatim* test output,
-not a summary — a paraphrased traceback is the commonest cause of a fix solving
-the wrong problem. Re-prompt rather than rebuild: the worktree and agent are
-still there. A failure inside two seconds having produced nothing is a transient
-endpoint blip, not a task failure; re-prompt those without spending an attempt.
-
-**f. Commit from outside the agent, check the contract, then merge.** The agent
-never touches git; you control the message and see the diff first.
+**g. Commit from outside the agent, check the contract, then merge.** The agent never touches git;
+the Manager controls the message and sees the diff first.
 
 ```bash
-git -C <worktree-path> diff --name-only            # contract check, see below
+git -C <worktree-path> diff --name-only            # contract check
 git -C <worktree-path> add -A
 git -C <worktree-path> commit -m 'feat: add config loader'
-git -C <project> merge --no-ff herdr_t1 -m 'merge T1'
+git -C <project> merge --no-ff herdr_Coder-T1 -m 'merge Coder-T1'
 herdr worktree remove --workspace <workspace-id>
 python3 $SKILL_DIR/scripts/buildloop.py pass --project <project> --id T1 --commit <sha>
 ```
 
-**The contract check is not optional.** If the commit touches the test file, or
-any file whose contents you pasted into the prompt as the interface, the agent
-changed what it was supposed to conform to — the shortest path to "done" for a
-model under pressure. Never merge such a commit unread; treat it as a failed
-attempt with the reason naming the file it rewrote.
+**The contract check is not optional.** If the commit touches the test file, or any file whose
+contents were pasted into the prompt as the interface, the Coder changed what it was supposed to
+conform to. Never merge such a commit unread; treat it as a failed attempt naming the file it
+rewrote. Merging each task before the next is cut is what makes the next worktree contain this
+task's code; one commit per task means a later failure never costs the earlier work.
 
-Merging each task before the next is cut is what makes the next worktree contain
-this task's code. One commit per task means a later failure never costs you the
-earlier work.
+### Escalation
+
+Two thresholds keep a stuck item from burning wall clock. The Manager owns both decisions.
+
+- **More than two back-and-forths** between the Tester/QA and the Coder on the same item → the
+  Tester/QA **escalates to the Architect** (`Architect-T<id>`). The Architect resolves the root
+  cause, the Manager relays the resolution to the Coder, and the Coder re-implements. This is a new
+  Architect task, not a repeat of the Coder's.
+- **More than five loops** on the same item — counting Coder fixes and Architect remediations — →
+  **break the loop.** `buildloop.py fail` marks the task `blocked` on the fifth failure and exits 4;
+  honour that, stop, and ask the user. Do not start a sixth attempt or re-plan around it.
+
+`fail` increments the attempt counter and prints `attempts_remaining`. Record every outcome through
+the state file so a resume knows where it is:
+
+```bash
+python3 $SKILL_DIR/scripts/buildloop.py fail --project <project> --id T1 \
+  --reason 'test_defaults: AssertionError, expected {} got None'
+```
 
 ### Step 5: Final verification
 
-When `next` exits 5 with `complete: true`, verify from a clean tree rather than
-trusting the accumulated per-task greens:
+When `next` exits 5 with `complete: true`, verify from a clean tree rather than trusting the
+accumulated per-task greens:
 
-1. `git status` — the tree must be clean; anything uncommitted means a task
-   finished without its commit.
-2. Run the full test command once more, from the project directory on the run
-   branch. This is the tree everything was merged into, and the only one that
-   has all of it.
-3. `herdr worktree list` and `herdr agent list` must show none of the run's
-   worktrees or agents, and no `herdr_*` branch may still hold unmerged work.
-4. Re-read the spec and confirm every numbered requirement appears as a task
-   `requirement` value. An unmapped requirement is a planning miss — add it as a
-   new task and resume the loop rather than declaring the build done.
+1. `git status` — the tree must be clean; anything uncommitted means a task finished without its commit.
+2. Run the full test command once more, from the project directory on the run branch — the tree
+   everything was merged into, the only one that has all of it.
+3. `herdr worktree list` and `herdr agent list` must show none of the run's worktrees or agents, and
+   no run branch may still hold unmerged work.
+4. Re-read the scoped spec and confirm every numbered requirement appears as a task `requirement`
+   value. An unmapped requirement is a planning miss — add it as a new task and resume the loop
+   rather than declaring the build done.
 
 ### Step 6: Report and hand back
 
@@ -310,108 +335,127 @@ trusting the accumulated per-task greens:
 python3 $SKILL_DIR/scripts/buildloop.py report --project <project>
 ```
 
-Pass the markdown table through as-is. Then **stop and ask** before merging or
-pushing — invoking this skill is not authorization for either. When the user
-agrees, `/commit2repo` handles the merge and push, and `ExitWorktree` removes
-the worktree and its branch.
+Pass the markdown table through as-is. Then **stop and ask** before merging or pushing — invoking
+this skill is not authorization for either. When the user agrees, `/commit2repo` handles the merge
+and push, and `ExitWorktree` removes the worktree and its branch.
 
-## Agent prompt template
+## Compaction
 
-`herdr agent prompt` types text into the opencode TUI. **There is no attachment
-mechanism**, so anything the agent must conform to is in the prompt text — never
-a path to a spec, a PRD, or a design document. The agent reads what you paste
-and nothing else.
+The only durable record of a run is `.buildloop/state.json` (progress, attempts, commits),
+`.buildloop/spec.md` (the scoped requirements), and this file — **the conversation is not the
+record.** If the harness compacts the session mid-run, do not rely on memory: before the next
+dispatch, re-read this SKILL.md, run `buildloop.py status`, and re-read `.buildloop/spec.md`, then
+resume with `next` (never `init`). Because progress lives in the state file, a compaction costs
+nothing — the loop picks up exactly where it left off.
 
-**Read [references/agent-prompt.md](references/agent-prompt.md) before writing
-your first task prompt**, and again before a re-prompt after a failure. It holds
-both templates and the four properties that decide whether a task comes back
-written or comes back as prose.
+## Config
+
+[config/buildloop.json](config/buildloop.json) holds three settings the Manager reads before
+dispatching:
+
+- `agent_framework` — `herdr` (default) or `opencode`; which runner dispatches the agents.
+- `concurrency_budget` — the per-model slot counts (how many agents may run at once on each model family).
+- `auto_approve` — boolean; when `true`, add `--auto` to each `herdr agent start` so agents auto-approve
+  commands instead of prompting for permission.
 
 ## Gotchas
 
-- **Most workspace projects have no test suite** — 11 of 37 repos have a
-  top-level `tests/` directory (counted 2026-08-24). Assuming a runner exists is
-  the default failure of this workflow; Step 2 exists because of it.
-- **`idle` is not success.** This is the failure mode that most looks like a
-  clean run. If the endpoint refuses fast, opencode prints the error and settles
-  straight back to `idle`, so `--wait` returns settled while nothing was
-  written. Confirm every task against `git -C <worktree> status --porcelain`
-  before believing it ran.
-- **A build agent claiming "all tests pass" usually ran one file.** Always run
-  the full command yourself in step 4c. This is where cross-task regressions
-  surface.
-- **An agent under pressure will edit the test instead of the code** — deleting
-  an assertion, adding `pytest.mark.skip`, loosening a comparison. Here the test
-  is committed on the run branch *before* dispatch, so this shows up as the
-  contract check in step 4f finding the test file in the diff. Any commit
-  touching the test file is a failed attempt, not a pass.
-- **The concurrency is a config value, not a constant.** It was one agent
-  before the models were upgraded and is three now, which is why
-  `_lib/agents_config.py` resolves it — flag, then `$AGENTS_MAX_PARALLEL`, then
-  the project's `.claude/agents-config.json`, then the machine file, then a
-  built-in 3. Read it at the start of a run and tell the user the wall clock it
-  implies. `next` still excludes overlapping tasks from a batch, which is what
-  makes running a batch together safe at any concurrency.
-- **A herdr worktree is a snapshot of its base at the moment it is cut**, and
-  lives outside the project under `~/.herdr/worktrees/`. Cut one before its
-  dependency merged and the agent cannot see that code. Cut, run, merge, remove,
-  then cut the next.
-- **Run the test command from the project directory on the run branch**, where
-  every task has been merged. A single worktree holds only its own task's work,
-  so a suite passing there proves less than it looks like.
-- **`/projects-git-cleanup` never touches `herdr_*` branches** — it sweeps
-  `claude_*` and `worktree-*` only, so an abandoned task's branch is yours.
-- **`fail --reason` is stored and shown to the next fix agent.** Put the real
-  assertion text in it, not "tests failed".
-- **State lives in `.buildloop/` inside the target project** and `init` adds it
-  to `.git/info/exclude`, not `.gitignore` — so it never appears as pending work
-  in `/projects-git-status` and never dirties a tracked file. Do not add it to
-  `.gitignore` instead.
-- **`--spec` and `--tasks` resolve relative to your current directory**, not to
-  `--project`. Use absolute paths when the two differ.
-- **Resuming is `next`, not `init`.** `init` exits 3 on an existing run;
-  `--force` discards all task history including attempt counts. Reach for
-  `status` first.
+- **Most workspace projects have no test suite** — 11 of 37 repos have a top-level `tests/`
+  (counted 2026-08-24). Assuming a runner exists is the default failure; Step 2 exists because of it.
+- **`idle` is not success.** If the endpoint refuses fast, opencode prints the error and settles
+  straight back to `idle`, so `--wait` returns settled while nothing was written. Confirm every task
+  against `git -C <worktree> status --porcelain` before believing it ran.
+- **A Coder claiming "all tests pass" usually ran one file.** The Tester/QA runs the full command in
+  Step 4d — this is where cross-task regressions surface.
+- **A Coder under pressure will edit the test instead of the code** — deleting an assertion, adding
+  `pytest.mark.skip`, loosening a comparison. The test is committed before dispatch, so this shows up
+  as the Step 4g contract check finding the test file in the diff. Any commit touching the test file
+  is a failed attempt, not a pass.
+- **The concurrency budget is per model, in config** (`concurrency_budget`): 3 slots for
+  `qwen3.6-35b-a3b`, 2 for `qwen3.8-27b`, 2 for `qwen3.5-9b`. The Manager counts live agents per model
+  before each dispatch and stays within each model's cap; different models run independently. The
+  shared `_lib/agents_config.py` is a separate, single-number mechanism for other skills — the
+  build-loop per-model budget governs here.
+- **A herdr worktree is a snapshot of its base at the moment it is cut**, and lives outside the
+  project under `~/.herdr/worktrees/`. Cut one before its dependency merged and the agent cannot see
+  that code. Cut, run, merge, remove, then cut the next.
+- **Run the test command from the project directory on the run branch**, where every task has been
+  merged. A single worktree holds only its own task's work, so a suite passing there proves less than
+  it looks like.
+- **Agent branches keep the `herdr_` prefix** (`herdr_Coder-T1`, `herdr_Architect`, `herdr_Tester`)
+  even though the agent id and label are named by role. `/projects-git-cleanup` sweeps `claude_*` and
+  `worktree-*` only, never `herdr_*`, so an in-flight run branch can never be deleted out from under a
+  run. Do not rename a branch to bare `Coder-T1`.
+- **`fail --reason` is stored and shown to the next fix agent.** Put the real assertion text in it,
+  not "tests failed".
+- **State lives in `.buildloop/` inside the target project**, and `init` adds it to
+  `.git/info/exclude`, not `.gitignore` — so it never appears as pending work in
+  `/projects-git-status` and never dirties a tracked file. Do not add it to `.gitignore` instead.
+- **`--spec` and `--tasks` resolve relative to your current directory, not to `--project`.** Use
+  absolute paths when the two differ.
+- **Resuming is `next`, not `init`.** `init` exits 3 on an existing run; `--force` discards all task
+  history including attempt counts. Reach for `status` first.
 
 ## Stop conditions
 
-Stop and ask the user when:
+The loop runs without a human in the loop, so most blocking items are **escalated to the agent who
+owns the decision**, which then decides and keeps the loop turning. Stop and ask the human only at an
+**authorization boundary** or when the loop is genuinely **exhausted**.
 
-- Any of `/herdr-agents`' preconditions fails — no Herdr pane, no opencode
-  integration, or a dirty tree. There is no runner without them.
-- An agent reports `blocked`: it is waiting on an approval or a question, and
-  answering on the user's behalf is their call.
-- A task hits the attempt cap (`fail` exits 4). Report what failed, the last
-  error, and what you tried — do not start a sixth attempt or re-plan around it.
-- An agent's commit is in contract violation — it edited the test or the
-  interface it was told to conform to. Report it; do not merge it to make the
-  run look clean.
-- The work needs a credential, external service, or paid API not already
-  configured in the project.
-- A requirement is ambiguous enough that two readings produce different
-  software. Note it and keep building the tasks that do not depend on it.
-- Anything would merge to `main`/`master`, push to a remote, or delete a branch.
-- The spec would require changing another project in the workspace.
+**Escalate to the owning agent and keep going** (do not ask the human):
+
+- A Coder is gated on a **design question** → the Architect decides and the Coder proceeds.
+- A requirement reads two ways → the Architect picks the reading the spec supports, documents it, and
+  keeps building the tasks that do not depend on it.
+- A Coder's commit is in contract violation → the Architect decides whether the change was legitimate;
+  re-dispatch with a tighter prompt; do not merge it unread.
+
+**Exceptions to the autonomy rule — ask the user** (these two seats gather answers, they do not guess):
+
+- The **Project-Sponsor** (Step 1) hits a business need, constraint, or a call that is the user's to
+  make → it asks the user and records the answer.
+- The **initial architecture pass** (Step 3) reaches a design decision that depends on a business or
+  usage fact only the user holds → the Architect raises it, the Manager carries it to the user, and the
+  answer is folded in before the architecture is finalized.
+
+**Stop and ask the human — authorization boundaries:**
+
+- Anything would merge to `main`/`master`, push to a remote, or delete a branch. Invoking this skill
+  authorizes none of these.
+- The work needs a credential, external service, or paid API not already configured in the project.
+- The scoped spec would require changing another project in the workspace.
+
+**Stop and ask the human — the loop is exhausted:**
+
+- Any of `/herdr-agents`' preconditions fails — no Herdr pane, no opencode integration, or a dirty tree.
+- An agent reports `blocked` on an item that no role can resolve.
+- A task hits the attempt cap (`fail` exits 4) — the loop is broken at five. Report what failed, the
+  last error, and what was tried; do not start a sixth attempt or re-plan around it.
 
 ## Bundled files
 
 | File | Purpose |
 | --- | --- |
+| `config/buildloop.json` | Run config: `agent_framework` (default `herdr`), the per-model `concurrency_budget`, and `auto_approve` (add `--auto` to agent starts). Read before dispatching |
 | `scripts/buildloop.py` | Task state, dependency scheduling, attempt cap. `--help` for the full interface |
 | `references/agent-prompt.md` | The task and re-prompt templates. Read before writing either |
+| `references/roles-and-levels.md` | The five roles, role→model→budget mapping, developer ladder, escalation thresholds, and loop decision tables. Read before dispatching any role |
+| `references/roles/project-sponsor.md` | Project-Sponsor briefing — paste at the top of its prompt |
+| `references/roles/architect.md` | Architect briefing (initial pass + remediation) |
+| `references/roles/coder.md` | Coder briefing — substitute the Architect's level |
+| `references/roles/tester.md` | Tester/QA briefing |
+| `references/roles/manager.md` | Manager seat (this session; no briefing to send) |
 | `evals/evals.json` | Trigger queries and test cases for this skill |
 
-The runner itself is not bundled here: `/herdr-agents` owns the dispatch
-mechanics and `/opencode-agents` ships the developer-level ladder and the token
-reader both skills read. All three sit side by side in every project's
-`.claude/skills/`.
+The runner itself is not bundled here: `/herdr-agents` (the default `agent_framework`) owns the dispatch
+mechanics and `/opencode-agents` is the `opencode` alternative — both sit side by side in every
+project's `.claude/skills/`.
 
 ## Done condition
 
 - [ ] `buildloop.py status` reports `complete: true` with zero blocked tasks
-- [ ] The full test command passes from the project directory on the run branch,
-      run by you, after the last merge
-- [ ] `git status` is clean, and `herdr worktree list` / `herdr agent list` show
-      none of the run's worktrees or agents
+- [ ] The full test command passes from the project directory on the run branch, run by the Tester/QA, after the last merge
+- [ ] `git status` is clean, and `herdr worktree list` / `herdr agent list` show none of the run's worktrees or agents
 - [ ] Every numbered spec requirement maps to a task
+- [ ] No item looped more than five times without the loop being broken and the user asked
 - [ ] The report has been shown and the merge/push question asked

@@ -38,11 +38,27 @@ to (3) or (4): a typo'd path must not silently run the wrong model.
 ```jsonc
 {
   "default_level": "senior",
+
+  "manager": {                                  // optional, and NOT a rung
+    "model": "ham51/qwen3.8-27b-manager",
+    "variant": "xhigh",
+    "agent": null,                              // null: reached as opencode's default
+    "summary": "27B dense, capped at 170K. ...",
+    "context_limit": 170000
+  },
+
   "levels": [
     {
       "level": "senior",                        // required, unique
       "aliases": ["sr"],                        // optional, also unique
-      "model": "ham51-2/qwen/qwen3.8-27b",      // required, an id from `opencode models`
+      "model": "ham51/qwen3.8-27b",             // required, an id from `opencode models`
+      "variant": "xhigh",                       // default reasoning effort; null = none offered
+      "agent": "senior",                        // opencode agent carrying that default
+      "agents": {                               // one agent per selectable effort
+        "xhigh": "senior",
+        "medium": "senior-medium",
+        "low": "senior-low"
+      },
       "summary": "27B dense. ...",              // shown by `levels`
       "use_for":   ["..."],
       "avoid_for": ["..."],
@@ -60,10 +76,75 @@ keep in sync — insert a new model at its position and it is ranked. `levels`
 reports a derived `rank` counting up from the junior end, for reading only.
 
 A structural problem — no `levels` array, a level with no `model`, a duplicate
-name, a `default_level` that resolves to nothing — fails immediately with exit
-2, on any command that touches the file. A model id that is not in `opencode
-models` does not: that is a live-endpoint fact, so `levels` and `check` report
-it in `problems` and exit 3 rather than blocking every other command.
+name, a `default_level` that resolves to nothing, a `manager` without a `model`
+— fails immediately with exit 2, on any command that touches the file. A model
+id that is not in `opencode models`, or an agent name opencode does not define,
+does not: those are live-endpoint and live-config facts, so `levels` and `check`
+report them in `problems` and exit 3 rather than blocking every other command.
+
+## Why `manager` sits outside `levels`
+
+It is the orchestrator seat, not a rung. On this endpoint the manager and the
+senior rung resolve to the *same server-side model* (`coder-senior`); the only
+difference is that the manager is capped shorter on purpose, so it stays quick
+at prompt processing and is pushed to hand bulk reading to subagents. Promoting
+a task from senior to manager would therefore buy no capability and cost 30K of
+context — an escalation in name only.
+
+Keeping it out of the array is what makes that structural rather than advisory.
+Nothing in the script walks the ladder by position, so a fourth entry on top
+would not break any code — it would mislead the *reader*, which is the thing
+that actually decides to escalate, and it would make `--level manager` dispatch
+task work to the narrowest window on the endpoint. `levels` reports it in its
+own `manager` key, beside the ladder and never inside it.
+
+## Reasoning effort: two mechanisms, because two runners
+
+A level's `variant` is its default reasoning effort. How you *apply* it depends
+entirely on which runner is dispatching, and the two do not share a mechanism:
+
+| Runner | What it launches | How the effort is set |
+|--------|------------------|-----------------------|
+| `/opencode-agents` | `opencode run` | `--variant <name>`, a real flag; beats opencode's stored choice |
+| `/herdr-agents` | the opencode TUI | `--agent <name>` from `agents`; the TUI has **no** `--variant` flag |
+
+The asymmetry is not a style choice. The TUI rejects `--variant` outright: it
+prints its help and exits, which surfaces through Herdr as `timeout: timed out
+waiting for agent startup` and names neither the flag nor the cause.
+
+There is a second trap behind the first. opencode persists the variant last
+picked in its TUI to `~/.local/state/opencode/model.json`, keyed by model, and
+**that stored choice beats an agent definition's `variant`** — silently. So an
+agent whose definition says `low` runs at whatever is stored for its model, and
+nothing on screen says so.
+
+The ladder sidesteps it by pointing every agent at a `*-dispatch` model key —
+identical to its twin, existing only so that no human ever selects it in the
+TUI and it therefore never acquires a stored entry. Two rules follow:
+
+- **Never select a `-dispatch` model in the TUI.** One interactive pick pins it
+  and every dispatched agent on that rung silently changes effort.
+- **Never repoint a ladder agent at the plain key** to remove a "duplicate".
+  The duplication is the mechanism.
+
+Note also that a model exposing exactly one variant does not default to it —
+verified: a key whose only variant was `low` still ran with no variant at all.
+An effort that is not named by an agent definition or a `--variant` flag is not
+set, so `agents` must name every effort you intend to be reachable.
+
+To verify what actually ran, read opencode's own record rather than the screen:
+
+```bash
+python3 - <<'EOF'
+import sqlite3, json, pathlib
+db = pathlib.Path.home() / ".local/share/opencode/opencode.db"
+c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+for (data,) in c.execute("select data from message order by rowid desc limit 20"):
+    d = json.loads(data)
+    if d.get("role") == "assistant":
+        print(d.get("agent"), d.get("modelID"), "variant=", d.get("variant"))
+EOF
+```
 
 ## Precedence
 

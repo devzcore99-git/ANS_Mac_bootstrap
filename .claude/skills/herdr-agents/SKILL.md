@@ -1,18 +1,14 @@
 ---
 name: herdr-agents
+version: 1.0.0
 description: >-
-  THE orchestrator for subagent work: runs opencode agents inside Herdr panes,
-  one git worktree and workspace per task, with live lifecycle state, then
-  reviews the diff, commits, merges, and tears the worktrees down. Use whenever
-  work is farmed out to agents at all — a batch of independent tasks, work
-  dispatched to the local model, /build-loop and /build-loop-recommend-build
-  builds — and for watching or taking over an agent mid-task. Triggers on "farm
-  this out", "spin up agents", "run these tasks in parallel", "use my local
-  model", "use herdr for this", and "I want to watch them work". How many run at
-  once is configured, not fixed. Requires Claude Code to be running inside a
-  Herdr pane. /opencode-agents is the legacy runner and is used only on an
-  explicit request. Not for a single edit Claude should make itself, and not for
-  configuring Herdr.
+  Mechanics for starting, stopping, checking on, and tearing down herdr-instantiated
+  opencode agents. Each agent gets its own git worktree, workspace, and pane.
+  Use when you need to start an agent, check its state, send it a prompt, detect
+  hangs, read its output, or remove its worktree. Does not cover workflow, roles,
+  loop orchestration, or developer levels — those are in /build-loop. Triggers on
+  "start an agent", "check on", "hang", "tear down", "worktree create/remove",
+  "herdr agent". Requires Herdr. Not for workflow design or task planning.
 metadata:
   runtime: herdr-cli
   requires: herdr 0.8+, opencode CLI, git
@@ -20,99 +16,65 @@ metadata:
 
 # Herdr agents
 
-Dispatch tasks to `opencode` subagents that Herdr runs in real panes. Each task
-gets its own git worktree, workspace, and pane; you drive it through the `herdr
-agent` surface and come back with a commit to review.
+Mechanics for `herdr agent` commands: create worktrees, start agents, send prompts,
+check state, detect hangs, read output, commit, and tear down.
 
-The reason to use Herdr rather than a headless dispatcher is **observability**:
-the agent is on screen, its lifecycle state is authoritative rather than
-inferred, and you can focus its pane and take over mid-task. The price is that
-agents run **unconfined** — see [Agents are not sandboxed](#agents-are-not-sandboxed).
-
-**This is the orchestrator for agent work.** Anything that farms tasks out to
-subagents — `/build-loop`, `/build-loop-recommend-build`, a batch the user hands
-over directly — dispatches through here. `/opencode-agents` is the legacy
-runner and is chosen only when the user explicitly names it or asks for headless
-dispatch or bubblewrap confinement, the two things it still does that Herdr does
-not. The two share their task-shaping rules, the developer ladder, and the token
-reader; only the runner differs.
+This skill is the mechanical reference. For workflow, roles, developer levels, and
+loop orchestration, read `/build-loop`.
 
 ## Before you start
 
-Three preconditions. Check them in this order and stop at the first failure.
+Four preconditions. Check them in this order and stop at the first failure.
 
-**1. This session must be inside a Herdr pane.**
+**1. The Manager Agent must be configured.**
+
+```bash
+python3 ../opencode-agents/scripts/opencode_agents.py levels 2>/dev/null | grep -A1 '"manager"' | grep '"agent"' | grep -v 'null'
+```
+
+or:
+
+```bash
+python3 -c "
+import json, re
+with open('/home/ahill/.config/opencode/model-levels.json') as f:
+    content = f.read()
+lines = [l for l in content.split(chr(10)) if not l.strip().startswith('//')]
+data = json.loads(chr(10).join(lines))
+agent = data['manager'].get('agent')
+model = data['manager'].get('model')
+if agent and model:
+    print('ok')
+else:
+    print('fail')
+" 2>/dev/null
+```
+
+If the manager has `"agent": null` or is missing entirely, stop and tell the
+user to configure it in `~/.config/opencode/model-levels.json`.
+
+**2. This session must be inside a Herdr pane.**
 
 ```bash
 test "${HERDR_ENV:-}" = 1 && printf '%s\n' "$HERDR_WORKSPACE_ID" "$HERDR_PANE_ID"
 ```
 
 If `HERDR_ENV` is unset, stop and tell the user to relaunch Claude Code from
-inside Herdr. Do not work around it: outside a pane the CLI talks to whatever
-sits on the default socket, which is either the user's own foreground session or
-nothing at all (`server_not_running`).
+inside Herdr.
 
-**2. The opencode integration must be installed.**
+**3. The opencode integration must be installed.**
 
 ```bash
 herdr integration status | grep '^opencode'
 ```
 
-It must say `current`. That plugin — `~/.config/opencode/plugins/herdr-agent-state.js` —
-is what makes `idle`/`working`/`blocked` authoritative rather than screen-scraped;
-it reports over the socket using `HERDR_ENV`, `HERDR_PANE_ID`, and
-`HERDR_SOCKET_PATH`, which Herdr injects into every managed pane. Install it with
-`herdr integration install opencode` if it is missing or outdated.
+It must say `current`. That plugin — `~/.config/opencode/plugins/herdr-agent-state.js`
+— makes `idle`/`working`/`blocked` authoritative. Install with
+`herdr integration install opencode` if missing or outdated.
 
-**3. The project tree must be clean.** Worktrees are cut from `HEAD`, so
-uncommitted work is invisible to every agent you start. Commit first.
+**4. The project tree must be clean.** Worktrees are cut from `HEAD`.
 
-## Workflow
-
-- [ ] Step 1: Shape the tasks — each names exact files and fits one module
-- [ ] Step 2: Create a worktree workspace per task — `worktree create` returns its IDs
-- [ ] Step 3: Start the agent — `agent start` returns `agent_status: idle`; `-- --agent` carries the level and its reasoning effort
-- [ ] Step 4: Prompt and wait — settles on `idle`/`done`, not `working`
-- [ ] Step 4a: If it runs long — separate a hung agent from a slow one
-- [ ] Step 5: Read the result — judge the diff, not the transcript
-- [ ] Step 6: Commit, review, merge, tear down — `worktree list` comes back empty
-- [ ] Step 7: Compact the session when major items are done (see [Session compaction](#session-compaction))
-
-### Step 1: Shape the tasks
-
-This step decides whether the work comes back right. The model is small and its
-context window, not its coding ability, is usually what fails.
-
-**Inline the contract; there is no attachment mechanism.** A headless dispatcher
-can attach a file to the prompt. `herdr agent prompt` types text into the
-opencode TUI, so anything the agent must conform to has to be *in the prompt
-text*. Paste the interface — the signature, the field names, two examples — and
-never point the agent at a spec, PRD, or design document. Pointing at a document
-is the most expensive habit there is: the agent reads it, and re-reads it, and
-each read is charged again.
-
-Write each prompt as if to a competent stranger:
-
-- Name the exact file to create or edit, and say **"Touch no other file."**
-- State the interface in full rather than describing where to find it.
-- Make it imperative. A prompt that reads as a question comes back as an answer
-  with nothing written.
-- A task that begins "find where…" is the wrong shape. Find it yourself and
-  name the file.
-- Size it to one module. Two agents solving halves of one problem produce two
-  incompatible halves — the worktrees isolate the filesystem, not the design.
-
-**Two things a task must never let the agent do:**
-
-1. **Write the tests it is judged by.** A green suite the agent authored
-   verifies nothing. Write the test yourself and paste it into the prompt, or
-   dispatch it as a separate task to a separate agent.
-2. **Edit what it conforms to.** Nothing stops an agent rewriting the interface
-   to make its own code compile — that is the shortest path to "done". You
-   cannot prevent it here, so you must detect it: Step 6 checks the commit
-   against the files you told it to conform to.
-
-### Step 2: Create a worktree workspace per task
+## Creating a worktree workspace
 
 One command produces the worktree, a workspace, and a pane sitting in it:
 
@@ -121,7 +83,7 @@ herdr worktree create --workspace "$HERDR_WORKSPACE_ID" \
   --branch herdr_<id> --base HEAD --label <id> --no-focus
 ```
 
-Read three values out of the JSON and keep them for the rest of the run:
+Read three values out of the JSON response:
 
 | Value | Path in the response |
 | --- | --- |
@@ -130,14 +92,11 @@ Read three values out of the JSON and keep them for the rest of the run:
 | worktree path | `.result.worktree.path` |
 
 The checkout lands at `~/.herdr/worktrees/<repo-name>/<branch-slug>` — **outside
-the project**, with underscores in the branch slugged to hyphens, so
-`herdr_parser` checks out at `.../herdr-parser`. Parse the path; do not
-construct it.
+the project**. Parse the path; do not construct it.
 
-Use `--no-focus` so the user keeps their pane. Never derive IDs from sidebar
-order or from the examples here.
+Use `--no-focus` so the user keeps their pane.
 
-### Step 3: Start the agent
+## Starting an agent
 
 ```bash
 herdr agent start <id> --kind opencode --pane <pane-id> --timeout 60000
@@ -147,398 +106,236 @@ Returns once Herdr has confirmed opencode is present and ready — about 3
 seconds — with `agent_status: idle` and `interactive_ready: true`. Anything
 else means it did not start; read the error rather than prompting into the void.
 
-#### Choosing the developer level
-
-The endpoint serves more than one model, and they are not interchangeable —
-they are **developers of different seniority**. Decide which rung the work
-deserves before starting the agent; that is your call, not the user's.
-
-Get the ladder from the config, not from memory. `/opencode-agents` ships the
-reader and both skills read the same file:
-
-```bash
-python3 ../opencode-agents/scripts/opencode_agents.py levels
-```
-
-Both skills sit side by side in every project's `.claude/skills/`, so that
-relative path holds; from elsewhere, point at the ASST_BBMax copy. Its bundled
-model-levels reference covers the schema and where the file lives. Adding a
-model is one edit there and **no change to this skill** — never paste an id or
-an agent name in as though it were fixed.
-
-| Level | Reach for it when |
-|-------|-------------------|
-| senior | correctness depends on an interface defined elsewhere; call sites must stay consistent; a wrong design costs more than the extra latency |
-| mid | one module against a spec you already wrote out — clear, self-contained, nothing to infer |
-| junior | mechanical and fully specified — rename, extract, add a docstring, scaffold a file whose shape the prompt dictates |
-
-Sending a junior task to senior burns wall clock for nothing; sending a senior
-task to junior comes back green and wrong. A task between two rungs goes to the
-higher.
-
-`levels` also reports a **manager**, which is not a rung: same server-side model
-as senior on a shorter context cap, so "promoting" a task to it buys nothing and
-costs window. It is the seat that plans and dispatches — never a task agent.
-
-Everything after a bare `--` reaches the `opencode` executable. **Start the
-agent by its level's `agent` name, not by model id** — the agent name is what
-carries the reasoning effort, which is the whole reason this is not `--model`
-(see [Choosing the reasoning effort](#choosing-the-reasoning-effort)):
+Start with its level's `agent` name:
 
 ```bash
 herdr agent start <id> --kind opencode --pane <pane-id> --timeout 60000 \
-  -- --auto --agent <the agent the level resolved to>
+  -- --agent <the agent name from the developer ladder>
 ```
 
-**Confirm it took effect before prompting.** The start result echoes the argv it
-used, and the TUI names the live model in its status line:
+Add `--auto` to the trailing args when the user explicitly requests auto-approve
+mode (the agent will auto-approve commands without prompting):
+
+```bash
+herdr agent start <id> --kind opencode --pane <pane-id> --timeout 60000 \
+  -- --auto --agent <the agent name from the developer ladder>
+```
+
+Without `--auto`, the agent prompts the user before each command it runs.
+
+**Confirm it took effect before prompting:**
 
 ```bash
 herdr agent read <id> --source visible | grep -i 'Build ·'
 ```
 
-Omit the flag and opencode falls back to the `model` key in
-`~/.config/opencode/opencode.jsonc` — the *manager*: the narrowest window on the
-endpoint, at no gain. Pass the level. Only `ham51/*` ids are the local endpoint;
-`opencode/*` is a hosted catalogue over the network, a different trust and
-latency story and not what this skill is for.
-
-**Pick one level per batch.** The endpoint keeps a single model resident, so
-alternating makes it unload and reload weights between agents — minutes of wall
-clock, not seconds. Across a batch, choose once. This binds harder now that
-several agents run at once: a batch at two levels thrashes the endpoint between
-them for its whole duration. Efforts within one level are free to vary — the
-`-dispatch` twins share a server-side model, so `senior` and `senior-low` never
-trade weights.
-
-#### Choosing the reasoning effort
-
-<a id="choosing-the-reasoning-effort"></a>Each rung has an effort dial — opencode
-calls it a **variant** — and `levels` names the rung's default plus the agent
-carrying each setting, under `variant` and `agents`. Take the default unless the task argues otherwise.
-
-**There is no `--variant` flag on this path.** It exists on `opencode run`, the
-*legacy* `/opencode-agents` runner; the TUI that `agent start` launches rejects it,
-so `-- --variant` is always a bug here. The effort comes from the agent definition
-instead — which is why Step 3 passes `--agent`:
-
-| Want | Start with |
-|------|------------|
-| the rung's default effort | `-- --agent senior` |
-| a specific effort | `-- --agent <the name under `agents`>` |
-| the junior rung | `-- --agent junior` — no variants declared, so no dial |
-
-Read `../opencode-agents/references/model-levels.md` before changing any of this:
-it carries the two traps that make the mechanism look broken, and the query that
-shows what effort actually ran.
-
-Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among live agents. The
-name follows the pane's occupant and is cleared when that agent exits, so reuse
-after teardown is fine.
-
-### Step 4: Prompt and wait
+If `--auto` was passed, verify it took effect:
 
 ```bash
-herdr agent prompt <id> "<the task text from Step 1>" --wait --timeout 1800000
+herdr agent read <id> --source visible | grep -i 'auto.*approve'
 ```
 
-`--wait` returns on the first settled `idle`, `done`, or `blocked`. Do not
-restate those with `--until`; use `--until` only for a state-specific wait such
-as `herdr agent wait <id> --until blocked`.
+Only `ham51/*` ids are the local endpoint; `opencode/*` is a hosted catalogue.
 
-**Always pass `--wait`, even when you intend to poll instead.** Without it the
-command reports success whether or not the text took effect — observed: a prompt
-sent to a just-started agent returned a normal result object, and the agent sat
-on opencode's splash screen with `state_change_seq` still at 1, having never
-seen it. `--wait` is what enforces the five-second lifecycle-change check that
-turns that silent loss into `agent_prompt_stalled`. If you need to poll, send
-with `--wait --timeout 60000` first, confirm the agent reached `working`, then
-poll from there.
+## Prompting and waiting
 
-**Give it 1800000 ms, or 2400000 for a task that runs a suite each iteration.**
-Herdr's own documentation shows `--timeout 120000`; that is for interactive
-questions, not for unattended work against a local model. A measured
-single-function task on this endpoint was still `working` after five minutes.
-The clock, not the context window, is what usually kills these runs.
+```bash
+herdr agent prompt <id> "<the task text>" --wait --timeout 1800000
+```
 
-What the states mean:
+`--wait` returns on the first settled `idle`, `done`, or `blocked`.
+
+**Always pass `--wait`.** Without it the command reports success whether or not
+the text took effect.
+
+**Timeouts:** `1800000` ms (30 min) for most tasks, `2400000` (40 min) for
+tasks that run a test suite each iteration. Herdr's own documentation shows
+`--timeout 120000`; that is for interactive questions, not for unattended work
+against a local model.
+
+### State meanings
 
 | State | Meaning |
 | --- | --- |
 | `working` | Still running. Not a failure — extend the wait |
-| `idle` / `done` | Settled and ready for input. `done` is idle after unseen background work |
+| `idle` / `done` | Settled and ready for input |
 | `blocked` | Herdr recognized an approval or question UI. **Stop and ask the user** |
 | `unknown` | An agent is present but unclassified. **Not proof of completion** |
 
-If `agent prompt` returns `agent_prompt_stalled`, the prompt produced no
-observed state change within five seconds — inspect with `agent get` and
-`agent read` before sending anything else.
+If `agent prompt` returns `agent_prompt_stalled`, the prompt produced no observed
+state change within five seconds — inspect with `agent get` and `agent read`.
 
-### Step 4a: Detect a hung agent
+### Polling instead of waiting
 
-A stalled model endpoint is indistinguishable from a busy one at the lifecycle
-layer, and this is where Herdr earns its place — a child process gives you a
-pid and a pipe that has simply gone quiet, while Herdr gives you the screen.
-
-Measured against a dead endpoint, sampling every 12 seconds:
-
-| Signal | During a hang | Useful? |
-| --- | --- | --- |
-| `agent_status` | `working`, forever | No |
-| `state_change_seq` | frozen | **Yes** — only moves on a lifecycle transition |
-| agent / pane `revision` | frozen — does not track repaints | No |
-| md5 of the whole viewport | **changes every sample** | **No — this is the trap** |
-| md5 of the viewport minus its last line | stable | **Yes** |
-| process CPU time | climbing ~0.45 of a core | No — it busy-waits |
-
-The whole-viewport hash moves because opencode animates a spinner on the last
-line. Diff the viewport naively and a hung agent looks productive. Drop the
-last line and the hash goes still the moment real output stops.
-
-So, to check on a long-running agent:
-
-```bash
-herdr agent read <id> --source visible | sed '$d' | md5sum
-```
-
-Same hash twice a minute apart, with `state_change_seq` unchanged, means hung —
-not slow. Interrupt with `herdr agent send-keys <id> esc` and check the endpoint
-before re-prompting.
-
-`herdr pane wait-output` is the API-native form and, unlike `agent read --lines`,
-works while the agent is busy:
+If you need to poll, send with `--wait --timeout 60000` first, confirm the agent
+reached `working`, then poll from there.
 
 ```bash
 herdr pane wait-output <pane-id> --regex '<pattern only a reply would match>' \
   --source visible --timeout 120000
 ```
 
-It returns `timeout: timed out waiting for output match` when nothing appears.
-Choose the pattern with care: the pane echoes your own prompt, so a pattern
-drawn from the task text matches immediately and tells you nothing.
+## Detecting a hung agent
 
-### Step 5: Read the result
+A stalled model endpoint is indistinguishable from a busy one at the lifecycle
+layer. Herdr gives you the screen to check.
+
+```bash
+herdr agent read <id> --source visible | sed '$d' | md5sum
+```
+
+Same hash twice a minute apart, with `state_change_seq` unchanged, means hung —
+not slow. Interrupt with `herdr agent send-keys <id> esc`.
+
+`herdr agent read <id> --source visible` works while the agent is `working` and
+returns the current viewport. `herdr agent read <id> --source recent-unwrapped --lines`
+is refused while the agent is busy.
+
+### `state_change_seq`
+
+| Signal | During a hang | Useful? |
+| --- | --- | --- |
+| `agent_status` | `working`, forever | No |
+| `state_change_seq` | frozen | **Yes** |
+| md5 of viewport minus last line | stable | **Yes** |
+| process CPU time | climbing ~0.45 of a core | No — busy-waits |
+
+## Reading output
+
+For a **settled** agent:
 
 ```bash
 herdr agent get <id>
 herdr agent read <id> --source recent-unwrapped --lines 200
 ```
 
-`recent-unwrapped` joins soft wraps and is the right source for a transcript.
-
-**Both of those are for a settled agent.** While one is still `working`, any
-read with `--lines` is refused — `agent_not_idle: its alternate-screen history
-can only be captured by scrolling while idle`. To check on a running agent use
-`herdr agent read <id> --source visible`, which returns the current viewport:
-enough to confirm the prompt landed and the model is generating, which is
-usually the real question.
-
-**Raising `--lines` often recovers nothing.** opencode runs on the terminal's
-alternate screen, and rows that leave it never enter Herdr's scrollback. If a
-larger line count reveals no more, do not keep raising it — ask the agent to
-write its summary to a Markdown file in the worktree and reply with the path,
-then read the file. Use that only as a fallback, never in the first prompt.
-
-In practice the transcript is the weaker evidence anyway. Judge the diff.
-
-### Step 6: Commit, review, merge, tear down
-
-**Read what the run cost before you tear the worktrees down.** herdr drives the
-opencode TUI, so there is no stream to parse here — but opencode records every
-session either way, and `/opencode-agents` ships the reader:
+For a **running** agent:
 
 ```bash
-python3 ../opencode-agents/scripts/opencode_agents.py tokens --agents-only --since 1
+herdr agent read <id> --source visible
 ```
 
-Both skills are installed side by side in every project's `.claude/skills/`, so
-that relative path holds; from elsewhere, point at the ASST_BBMax copy. Rows are
-attributed per task because each task has its own worktree and the command reads
-the task id from the worktree's last path segment. A row with `total: 0` is an
-agent that never got a reply — the same silent failure Step 4a hunts, visible
-here after the fact.
+**Raising `--lines` often recovers nothing.** opencode runs on the terminal's
+alternate screen. If a larger line count reveals no more, ask the agent to write
+its summary to a file and read that.
 
-That command belongs to `/opencode-agents`, not this skill, so its documentation
-lives there: read `../opencode-agents/references/token-accounting.md` for the
-fields and the caveats — notably that the ledger is container-local, so a
-devcontainer rebuild resets it to nothing.
+## Committing and merging
 
-Then commit from **outside** the agent, so the agent never needs write access to
-git metadata and you control the message:
+Commit from **outside** the agent, so the agent never needs write access to git
+metadata:
 
 ```bash
 git -C <worktree-path> add -A
 git -C <worktree-path> -c user.name=... commit -m "feat: ..."
 ```
 
-**Check for a contract violation before anything else.** If the commit touches a
-file whose contents you pasted into the prompt as the interface, the agent
-changed what it was supposed to conform to:
+**Check for contract violation** before merging:
 
 ```bash
 git -C <worktree-path> diff --name-only HEAD~1
 ```
 
-Never merge such a commit unread.
+If the commit touches a file whose contents you pasted as the interface, the agent
+changed what it was supposed to conform to. Never merge such a commit unread.
 
-Then review, merge, and remove:
+**Review the diff:**
 
 ```bash
 git -C <worktree-path> diff HEAD~1
+```
+
+## Token accounting
+
+herdr drives the opencode TUI, so there is no stream to parse for token data.
+opencode records every session; `/opencode-agents` ships the reader:
+
+```bash
+python3 ../opencode-agents/scripts/opencode_agents.py tokens --agents-only --since 1
+```
+
+Both skills are side by side in every project's `.claude/skills/`, so that
+relative path holds; from elsewhere, point at the ASST_BBMax copy.
+
+Read `../opencode-agents/references/token-accounting.md` for the fields and
+caveats — notably that the ledger is container-local, so a devcontainer rebuild
+resets it.
+
+## Teardown
+
+```bash
 herdr worktree remove --workspace <workspace-id>
 ```
 
-Read every diff. These agents ran unattended against a model that is not Claude;
-treat the output as a contractor's pull request, not as finished work.
-
-## Validation
-
-Do not report the run complete until all four hold:
-
-1. Every agent reached `idle`/`done` — never `blocked`, `unknown`, or still `working`.
-2. Every diff has been read, and nothing sits in contract violation.
-3. `herdr worktree list` shows none of the run's worktrees, and `herdr agent list`
-   none of its agents.
-4. No `herdr_*` branch is left holding unmerged work you have not reported.
-
-If a task produced no commit, say so. An agent that answered in prose without
-writing a file is a prompt that read as a question — rewrite it as an imperative
-naming exact files and re-dispatch.
-
-## Gotchas
-
-All observed on this machine against herdr 0.8.0, not inferred.
-
-- **Agents are not sandboxed.** <a id="agents-are-not-sandboxed"></a>Bubblewrap
-  confinement and Herdr's agent API are mutually exclusive here. `agent start`
-  runs a fixed `argv: ["opencode"]` with no wrapper hook, and `config.toml` has
-  no launch-command override. Wrapping the pane's shell instead does confine it
-  — verified, a write to `$HOME` returned `Read-only file system` — but then
-  `agent start` refuses with `agent_pane_busy: not an available shell`, because
-  bwrap stays resident between the pane's `shell_pid` and the foreground shell.
-  Dropping `--unshare-pid` does not close the gap. **The worktree is isolation
-  by convention only**; keep every prompt scoped to relative paths, and use
-  `/opencode-agents` when confinement actually matters.
-
-- **The TUI rejects flags `opencode run` accepts, and the failure is
-  unreadable.** `-- --variant low` makes opencode print its help and exit;
-  `agent start` reports `timeout: timed out waiting for agent startup`, naming
-  neither the flag nor the reason. `herdr pane read <pane-id> --source visible`
-  shows the help text sitting there. Pass only flags bare `opencode --help`
-  lists.
-
-- **Reasoning effort is stored per model, machine-wide, and beats the agent
-  definition.** `~/.local/state/opencode/model.json` holds the variant last
-  picked in the TUI, and it silently outranks an agent's `variant` key. The
-  ladder's agents name `*-dispatch` model keys precisely so no interactive pick
-  ever lands on them — **never select one in the TUI**, and never repoint a
-  ladder agent at its plain twin to remove the "duplicate".
-
-- **Never start an agent with `pane run`.** Launching `opencode` yourself does
-  not register an agent: `agent get <pane>` returns `agent_not_found`, `agent
-  list` stays empty, and `agent prompt`, `agent wait`, and every lifecycle state
-  are unavailable — which is the entire reason to use Herdr. `agent start` is
-  the only supported path.
-
-- **`agent start` needs an *available* shell pane.** The shell itself must be in
-  the foreground with no command running. A pane that already hosts an agent, or
-  anything else in the foreground, returns `agent_pane_busy`. `agent start`
-  never creates, splits, or moves layout — make the pane first.
-
-- **`unknown` is not `done`.** It means an agent is present that Herdr could not
-  classify. Treat it as unfinished and inspect the pane.
-
-- **CLI reads do not mark a tab seen**, which is why finished background work
-  reports `done` rather than `idle`. Both are settled; neither needs action.
-
-- **Worktrees live outside the repository**, under `~/.herdr/worktrees/`. They
-  never appear in `/projects-git-status` and never dirty the project, but
-  nothing else will clean them up either — `worktree remove` is this skill's job.
-
-- **Branches are `herdr_*`, deliberately not `claude_*` or `worktree-*`.**
-  `/projects-git-cleanup` sweeps only those two prefixes, so an in-flight agent
-  branch can never be deleted out from under a run.
-
-- **Uncommitted files are invisible to agents.** The worktree is cut from `HEAD`.
-  This bites hardest with `.opencode/agent/*.md`: edit one, dispatch without
-  committing, and the agent runs with the old definition — or the wrong agent
-  runs entirely.
-
-- **How many agents run at once is a config value — read it, do not assume.**
-  The endpoint serves three at a time now; it served one before the models were
-  upgraded, which is exactly why the number lives in a file rather than in this
-  sentence:
-
-  ```bash
-  python3 ../_lib/agents_config.py --project <project>
-  ```
-
-  First match wins: `$AGENTS_MAX_PARALLEL`, then the project's own
-  `.claude/agents-config.json`, then the `projects` map in
-  `~/.config/opencode/agents-config.json`, then that file's
-  `max_parallel_agents`, then a built-in 3. Give a project its own entry to hold
-  it lower while its tasks are large. Past the configured number the agents
-  contend for the same weights rather than using idle capacity, so nothing
-  finishes sooner. Budget wall clock as the sum of the tasks over the
-  concurrency, and treat that divisor as a ceiling rather than a promise.
-
-- **The endpoint blips.** A failure inside two seconds having produced nothing
-  is a transient provider error, not a task failure. Re-prompt the same agent
-  rather than rebuilding the worktree.
-
-- **A dead endpoint has two faces, and one of them looks like success.** If the
-  provider refuses fast, opencode reports the error and settles straight back to
-  `idle` — so `--wait` returns "settled" and the run looks clean while nothing
-  was written. **`idle` after a prompt is not evidence the task was done**;
-  confirm against the worktree diff, never against the state alone. If the
-  provider instead accepts and never answers, the agent stays `working`
-  indefinitely (observed for 20 minutes on a single-function task). Step 4a
-   separates that from a genuinely slow task.
+Read `herdr worktree list` and `herdr agent list` to confirm cleanup.
 
 ## Session compaction
 
-When the manager session has accumulated significant context — after a multi-task
-batch completes, after a `build-loop` round finishes, or whenever the conversation
-grows long enough that token cost is a concern — compact the session to discard
-older messages while preserving the conversation thread.
+After a run is fully complete (all worktrees torn down, diffs reviewed, branches
+merged), compact the session:
 
 ```
 /compact
 ```
 
-This runs the `opencode-session-compact` plugin which calls the `session/compact`
-method on the opencode server for the active session. The conversation continues
-but the older tokens are discarded. If you want to compact a different session:
+or for a different session:
 
 ```
 /compact <sessionID>
 ```
 
-Compact **after** the run is fully complete (all worktrees torn down, diffs reviewed,
-branches merged/pushed). Do not compact mid-run — you lose the ability to
-reference earlier agent output.
+Do not compact mid-run — you lose the ability to reference earlier agent output.
+
+## Validation
+
+Do not report a run complete until all four hold:
+
+1. Every agent reached `idle`/`done` — never `blocked`, `unknown`, or still `working`.
+2. Every diff has been read, and nothing sits in contract violation.
+3. `herdr worktree list` shows none of the run's worktrees, and `herdr agent list`
+   none of its agents.
+4. No `herdr_*` branch is left holding unmerged work.
+
+## Gotchas
+
+- **Agents are not sandboxed.** `agent start` runs `opencode` with no wrapper
+  hook. **The worktree is isolation by convention only**; keep every prompt
+  scoped to relative paths.
+- **The TUI rejects flags `opencode run` accepts.** `-- --variant low` makes
+  opencode print its help and exit; `agent start` reports `timeout: timed out
+  waiting for agent startup`. Pass only flags bare `opencode --help` lists.
+- **Reasoning effort is stored per model, machine-wide.**
+  `~/.local/state/opencode/model.json` holds the variant last picked in the TUI
+  and silently outranks an agent's `variant` key. **Never select one in the
+  TUI**, and never repoint a ladder agent at its plain twin.
+- **Never start an agent with `pane run`.** Launching `opencode` yourself does
+  not register an agent. `agent start` is the only supported path.
+- **`agent start` needs an *available* shell pane.** A pane that already hosts
+  an agent, or anything else in the foreground, returns `agent_pane_busy`.
+- **`unknown` is not `done`.** It means an agent is present that Herdr could not
+  classify. Treat it as unfinished.
+- **CLI reads do not mark a tab seen.** Finished background work reports `done`
+  rather than `idle`. Both are settled; neither needs action.
+- **Worktrees live outside the repository**, under `~/.herdr/worktrees/`.
+  `worktree remove` is this skill's job to clean them.
+- **Branches are `herdr_*`, deliberately not `claude_*` or `worktree-*`.**
+  `/projects-git-cleanup` sweeps only those two prefixes.
+- **Uncommitted files are invisible to agents.** The worktree is cut from `HEAD`.
 
 ## Stop conditions
 
 Stop and ask the user when:
 
-- `HERDR_ENV` is unset, or the opencode integration is missing. Neither has a
-  safe workaround.
-- Any agent reports `blocked` — it is waiting on an approval or a question, and
-  answering on the user's behalf is their call, not yours.
-- The project tree is dirty at preflight. Offer `/commit2repo`; do not stash or
-  discard.
-- A commit is in contract violation, or a task's tests were written by the agent
-  that is judged by them. Report it; do not merge to make the run look clean.
-- Merging a `herdr_*` branch into the project's main branch, or pushing.
-  Invoking this skill authorizes neither.
+- `HERDR_ENV` is unset, or the opencode integration is missing.
+- Any agent reports `blocked`.
+- The project tree is dirty at preflight. Offer `/commit2repo`; do not stash.
+- A commit is in contract violation.
+- Merging a `herdr_*` branch into main or pushing.
 
 ## Related
 
-| Skill | Difference |
+| Skill / File | Purpose |
 | --- | --- |
-| `/opencode-agents` | **Legacy.** Same models and task rules, headless subprocess runner, supports `--sandbox` confinement, no live pane to watch. It runs `opencode run`, so it takes `--model` and `--variant` directly and needs no agent definition — the one place the effort is a plain flag. Use only on an explicit request. Still ships the shared developer ladder, its `levels` reader, and the `tokens` reader Step 6 uses — those are current, not legacy |
-| `/build-loop` | Dispatches its per-task build agents through this skill |
-| `/build-loop-recommend-build` | The same, for every round of its outer loop |
+| `/build-loop` | Workflow, roles, developer levels, loop orchestration |
+| `/opencode-agents` | **Legacy.** Headless runner, supports `--sandbox`. Still ships the shared developer ladder (`levels`) and token reader (`tokens`) |
 | `/commit2repo` | Merging and pushing a reviewed `herdr_*` branch |
 | `/projects-git-cleanup` | Sweeps `claude_*` and `worktree-*` only — never `herdr_*` |

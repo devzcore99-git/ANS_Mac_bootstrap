@@ -3,6 +3,12 @@
 Read this when writing the prompt for a build task or a re-prompt after a failure — step 4b and step 4e of
 `SKILL.md`. It is separate only to keep the always-loaded body under budget; the rules in it are not optional.
 
+**Prepend the role's briefing first.** Each role has a ready-to-paste preamble
+under [roles/](roles/) (`project-sponsor.md`, `architect.md`, `coder.md`,
+`tester.md`) that tells the agent who it is and what is expected. The full
+prompt is: **role briefing**, then the task body below. A role the agent is not
+told is a role it will not act.
+
 `herdr agent prompt` types text into the opencode TUI. **There is no attachment
 mechanism**, so anything the agent must conform to is in the prompt text — never
 a path to a spec, a PRD, or a design document. Pointing at a document is the

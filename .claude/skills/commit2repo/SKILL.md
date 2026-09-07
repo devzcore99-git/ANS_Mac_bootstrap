@@ -1,5 +1,6 @@
 ---
 name: commit2repo
+version: 1.0.0
 description: Commit everything in the current repository to a claude_ branch, merge it into main/master, and push to origin, in two script calls. Use when the user wants to commit and push the repo they are working in, save and publish their changes, or ship what is in the working tree without a multi-project sweep.
 ---
 
@@ -26,11 +27,7 @@ instead. This skill deliberately handles only the repo you are standing in.
   nothing. Destructive. For work that is *already* committed.
 
 Paths below use `$SKILL_DIR` — the base directory printed when this skill
-loads. It is not a real environment variable: substitute the printed path, or
-set it inline in the same command (`SKILL_DIR=... python3 "$SKILL_DIR/..."`),
-because shell state does not persist between calls. This is what lets the
-commands run from any project, whether the skill lives in a repository or is
-symlinked into `~/.claude/skills/`.
+loads. Substitute the printed path or set it inline in the same command.
 
 Run `python3 $SKILL_DIR/commit2repo.py --help` for the full
 interface. Exit codes: `0` success, `1` a git command failed, `2` usage or
@@ -96,18 +93,7 @@ environment error, `3` nothing to commit.
 ## Reporting
 
 Report in exactly two top-level sections, **Actionable** first, then
-**Non-Actionable**, separated by two horizontal rules with blank lines around
-and between them:
-
-```markdown
-...last line of the Actionable section.
-
----
-
----
-
-## Non-Actionable
-```
+**Non-Actionable**, separated by two horizontal rules:
 
 **Actionable** — anything still needing the user: a failed push and what to do
 about it, a conflicted merge, files swept in by `git add -A` that look

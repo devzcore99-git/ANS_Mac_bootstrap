@@ -31,8 +31,8 @@ task id, because both skills give every task its own worktree:
 
 ```
 RUNNER           TASK            MODEL                          TOTAL
-herdr-agents     herdr-hello     ham51-2/qwen/qwen3.6-35b-a3b     11940
-opencode-agents  plain           ham51-2/qwen/qwen3.5-9b          15029
+herdr-agents     herdr-hello     ham51/qwen3.6-35b-a3b            11940
+opencode-agents  plain           ham51/qwen3.5-9b                 15029
 ```
 
 ## Reading it
@@ -51,7 +51,7 @@ as a session row with `total: 0`.
 
 ## Three caveats
 
-- **`cost` is not money here.** The `ham51-2` provider has no pricing configured,
+- **`cost` is not money here.** The `ham51` provider has no pricing configured,
   so every local row is `0.0`. The command emits a `cost_note` saying so rather
   than printing a total that would read as free when it is merely unpriced. Only
   a hosted provider produces a real figure.

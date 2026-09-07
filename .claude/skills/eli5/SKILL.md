@@ -1,5 +1,6 @@
 ---
 name: eli5
+version: 1.0.0
 description: >-
   Re-explain what was just printed at a lower technical altitude — plainer words, same
   facts, shorter. Not baby talk: it drops a level or two of jargon, it does not rewrite
@@ -7,9 +8,7 @@ description: >-
   wants something dumbed down, simplified, put in plain English or layman's terms, or
   pitched at a higher level — including bare phrasings like 'eli5', 'in English?', 'what
   does that actually mean', or 'I didn't follow any of that'. The target is whatever the
-  last output was: Claude's own answer, a skill's report, or a command's stdout. Not for
-  writing documentation, and not for a first explanation of code the user points at — that
-  is ordinary work, not a re-explanation.
+  last output was. Not for writing documentation or explaining code the user points at.
 ---
 
 # ELI5

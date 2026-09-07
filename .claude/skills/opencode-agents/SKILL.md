@@ -1,16 +1,12 @@
 ---
 name: opencode-agents
+version: 1.0.0
 description: >-
-  LEGACY headless runner for opencode subagents, each in its own git worktree.
-  Superseded by /herdr-agents, which is the orchestrator for all agent work —
-  use this one ONLY when the user explicitly names it, explicitly asks for the
-  headless or sandboxed runner, or is outside Herdr and has said to proceed
-  anyway. Do not choose it on your own when a task merely needs subagents; that
-  is /herdr-agents. Still the home of two things both skills read: the
-  developer-level ladder (`levels`) and the token-accounting reader (`tokens`),
-  which remain current and are not legacy. Triggers only on explicit phrasings
-  like "use opencode-agents", "run it headless", "use the sandboxed runner", or
-  "the old opencode dispatcher".
+  LEGACY headless runner for opencode subagents in git worktrees. Superseded by
+  /herdr-agents — use this ONLY when the user explicitly names it or asks for
+  headless/sandboxed mode. Still the home of the developer-level ladder (levels)
+  and token accounting (tokens). Triggers only on explicit phrasings like
+  "use opencode-agents", "run it headless", or "the old opencode dispatcher".
 metadata:
   runtime: python3-stdlib
   requires: opencode CLI, git
@@ -159,7 +155,7 @@ what decides whether the work comes back right. A task that fills its context
 does not fail. It gets vague, forgets the interface it was given, and re-reads
 files it already has, and none of that shows in the exit code.
 
-Measured against `ham51-2/qwen/qwen3.5-9b`, the junior rung: ~4,900 tokens of
+Measured against `ham51/qwen3.5-9b`, the junior rung: ~4,900 tokens of
 fixed overhead per step plus ~1,900 of growth, so a 128,000 budget is about **60
 tool calls**. Most tasks are nowhere near it — the worst so far peaked at 55,842
 over 27 steps. The rungs above carry a larger budget in `model-levels.json`, but
@@ -277,6 +273,20 @@ task between two rungs goes to the higher.
 both. `dispatch` and `check` validate the resolved id against `opencode models`
 and exit 3 before any work starts.
 
+**Reasoning effort is a plain flag here, and only here.** This runner shells out
+to `opencode run`, which takes `--variant <name>` and applies it over whatever
+the TUI last stored for that model. Each rung's default is the `variant` field
+`levels` reports; pass the flag only to override it:
+
+```bash
+opencode run --model ham51/qwen3.8-27b --variant low "…"
+```
+
+`/herdr-agents` cannot do this — the opencode TUI has no such flag — so it
+reaches the same efforts through the per-effort agent definitions the ladder
+names under `agents`. Do not copy an `--agent` name into a `dispatch` task file
+expecting it to set the effort here; use `--variant`.
+
 **Pick one level per batch.** The endpoint keeps a single model resident, so
 alternating makes it reload weights between tasks — minutes, not seconds.
 `dispatch` warns when a batch names more than one; split it in two.
@@ -384,9 +394,11 @@ These are all observed on this machine, not guesses.
 - **An invalid default model fails as a server error, not a config error.**
   `~/.config/opencode/opencode.jsonc` held `"model": "qweb/qwen3.5-9b"` (typo,
   and missing the provider prefix) until 2026-08-09; bare `opencode run` failed
-  with "Unexpected server error" rather than naming the model. It is now
-  `ham51-2/qwen/qwen3.5-9b` and works. `check` re-validates the default against
-  `opencode models` every run, so pass `--model` if it ever reports this again.
+  with "Unexpected server error" rather than naming the model. The same class of
+  rot hit the ladder itself: every rung named a `ham51-2/qwen/*` id that no
+  longer existed, and `levels` reported all three unavailable (fixed 2026-09-05,
+  now `ham51/*`). `check` and `levels` re-validate against `opencode models`
+  every run — an id that stops resolving is reported, never guessed around.
 
 - **Uncommitted agent files are invisible to the agents.** A worktree is checked
   out from `HEAD`. Editing `.opencode/agent/builder.md` and dispatching without
@@ -507,8 +519,10 @@ user asks.
 | File | Purpose |
 | --- | --- |
 | `scripts/opencode_agents.py` | The dispatcher — levels, check, dispatch, diff, merge, cleanup |
-| [model-levels.json](model-levels.json) | The developer ladder: which model is senior, mid, junior. The owner's copy at `~/.config/opencode/model-levels.json` wins over this one |
-| [assets/agent-template.md](assets/agent-template.md) | Starter opencode agent definition |
+| [model-levels.json](model-levels.json) | The developer ladder: which model is architect, tester, senior, mid, junior. The owner's copy at `~/.config/opencode/model-levels.json` wins over this one |
+| [assets/agent-template.md](assets/agent-template.md) | Starter opencode agent definition (for coder agents) |
+| [assets/architect-agent-template.md](assets/architect-agent-template.md) | Architect agent definition — copy to `.opencode/agent/architect.md` and commit before use |
+| [assets/tester-agent-template.md](assets/tester-agent-template.md) | Tester agent definition — copy to `.opencode/agent/tester.md` and commit before use |
 | [references/agent-files.md](references/agent-files.md) | Agent frontmatter fields: tools, temperature, model, permissions |
 | [references/sandboxing.md](references/sandboxing.md) | What `--sandbox` confines, what it does not, and why it refuses |
 | [references/model-levels.md](references/model-levels.md) | The developer ladder: the schema, the four config locations, precedence, mixed batches |

@@ -1,17 +1,16 @@
 ---
 name: build-loop-recommend-build
+version: 1.0.0
 description: >-
-  Build a project to passing tests with /build-loop, then repeatedly review it
-  with /projects-recommendations and /projects-features-suggest and build what
-  they find — a capped number of improvement rounds, three by default, asked at
-  the start. The initial build must go green before any review round begins.
-  Use when the user wants a project built and then improved on its own, wants
-  the review findings implemented rather than just reported, or asks for
-  iterative or self-improving build passes — including phrasings like "build it
-  then make it better", "build and apply the recommendations", "keep improving
-  it for a few rounds", or "build it, review it, fix it, repeat". For a single
-  build to green use /build-loop; to review without building use the two review
-  skills directly.
+  Build a project to passing tests with /build-loop, then review and build
+  iteratively with /projects-recommendations and /projects-features-suggest — a
+  capped number of rounds, three by default. The initial build must go green
+  before review rounds begin. Use when the user wants a project built and then
+  improved on its own, wants review findings implemented, or asks for iterative
+  build passes — including "build it then make it better", "build and apply the
+  recommendations", or "keep improving it for a few rounds". For a single build
+  to green use /build-loop; to review without building use the two review skills
+  directly.
 metadata:
   archetype: workflow
   state_file: .buildloop/rounds.json
@@ -59,9 +58,7 @@ split is not an oversight.
    before the user commits to it; it decides how many rounds they want.
 
 Paths below use `$SKILL_DIR` — the base directory printed when this skill
-loads. It is not a real environment variable: substitute the printed path, or
-set it inline in the same command, because shell state does not persist
-between calls.
+loads. Substitute the printed path or set it inline in the same command.
 
 ## Workflow
 
