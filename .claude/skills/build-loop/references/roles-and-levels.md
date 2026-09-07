@@ -14,9 +14,10 @@ Every herdr agent is named by role and task using `(ROLE)-(TaskID)`:
 | Project-Sponsor | `Project-Sponsor` | `herdr_Project-Sponsor` |
 | Architect (initial) | `Architect` | `herdr_Architect` |
 | Architect (remediating T4) | `Architect-T4` | `herdr_Architect-T4` |
-| Coder (task T1) | `Coder-T1` | `herdr_Coder-T1` |
-| Coder (task T2) | `Coder-T2` | `herdr_Coder-T2` |
+| Coder (task T1) | `SnrCoder-T1` / `MidCoder-T1` / `JrCoder-T1` | `herdr_SnrCoder-T1` / `herdr_MidCoder-T1` / `herdr_JrCoder-T1` |
+| Coder (task T2) | `SnrCoder-T2` / `MidCoder-T2` / `JrCoder-T2` | `herdr_SnrCoder-T2` / `herdr_MidCoder-T2` / `herdr_JrCoder-T2` |
 | Tester/QA | `Tester` | `herdr_Tester` |
+| Infrastructure | `Infrastructure` | `herdr_Infrastructure` |
 
 The **agent id and label** carry the role name; the **branch** keeps the `herdr_`
 prefix so `/projects-git-cleanup` (which sweeps `claude_*` and `worktree-*`
@@ -35,6 +36,7 @@ memory, and never repointed ad hoc.
 | **Manager** (the hub) | `manager` | `ham51/qwen3.6-35b-a3b-manager` | thinking | 3 | Orchestrates, routes escalations, approves merges. Not dispatched as a task agent. |
 | **Project-Sponsor** | `senior` | `ham51/qwen3.8-27b` | xhigh | 2 | Represents business needs; scopes the work, owns the *what/why*. |
 | **Architect** | `architect` | `ham51/qwen3.8-27b` | xhigh | 2 | Designs architecture + specs; assigns per-task levels; resolves escalations. |
+| **Infrastructure** | `senior` | `ham51/qwen3.8-27b` | xhigh | 2 | Sets up environment, scaffolding, dependencies; ensures security and guidelines are followed. |
 | **Coder — senior** | `senior` | `ham51/qwen3.8-27b` | xhigh | 2 | Cross-module / interface-critical work. |
 | **Coder — mid** | `mid` | `ham51/qwen3.6-35b-a3b` | thinking | 3 | One module against a clear spec (the default). |
 | **Coder — junior** | `junior` | `ham51/qwen3.5-9b` | — | 2 | Mechanical, fully-specified edits. |
@@ -87,7 +89,7 @@ routes accordingly:
 Only the runner changes. The roles, briefings, concurrency budget, and
 escalation are identical across both frameworks.
 
-## The five roles
+## The six roles
 
 ### Manager (you) — the hub
 
@@ -255,6 +257,38 @@ herdr agent prompt Tester "Run the test suite for <Tid>. Report pass/fail with v
 **The tester's template lives at** `opencode-agents/assets/tester-agent-template.md`
 — copy it into the project's `.opencode/agent/` and commit it before running,
 or the tester agent will not be found.
+
+### Infrastructure
+
+The Infrastructure agent is responsible for ensuring the environment is set up
+properly so every other role can perform their work. The Manager should refer all
+scaffolding, dependency setup, environment configuration, and infrastructure
+build tasks to this agent.
+
+**What it does:**
+1. **Sets up the development environment** — installs dependencies, configures
+   tooling, creates directory structure, sets up configuration files.
+2. **Validates the environment** — verifies that all prerequisites are met,
+   that the project can be built and tested from a clean state.
+3. **Maintains security and guidelines** — ensures no secrets are committed,
+   that dependency-allowlist policies are followed, that security-sensitive
+   files are properly gitignored.
+
+**What it does not do:** It does not write application code, write tests, or
+design architecture. Those are the Architect, Coders, and Tester/QA.
+
+The Infrastructure agent runs on the same model as senior (27B dense, xhigh
+effort) because environment setup requires understanding project structure,
+dependency chains, and security implications.
+
+```bash
+herdr worktree create --workspace "$HERDR_WORKSPACE_ID" \
+  --branch herdr_Infrastructure --base claude_<run> --label Infrastructure --no-focus
+herdr agent start Infrastructure --kind opencode --pane <pane-id> --timeout 60000 \
+  -- --auto --agent senior
+herdr agent prompt Infrastructure "<scoped project text>\n\nSet up the environment: install dependencies, configure tooling, create directory structure. Follow all security guidelines and dependency-allowlist policies. Report what you changed." \
+  --wait --timeout 2400000
+```
 
 ## Developer level selection
 

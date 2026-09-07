@@ -45,6 +45,7 @@ The agent that started the build-loop skill is the Manager unless otherwise spec
 it orchestrates, forwards information between roles, makes escalation calls, and approves
 merges. It does not scope, design, code, or test. Those are herdr agents, one per role per
 task: **Project-Sponsor** (what/why), **Architect** (architecture, specs, per-task level),
+**Infrastructure** (environment setup, scaffolding, dependencies),
 **Coder** (implement, senior/mid/junior), **Tester/QA** (run tests, report failures).
 Information flows through the Manager as the only hub.
 
@@ -176,6 +177,13 @@ cannot be written yet is a task that is not specified yet.
 
 Pass the result to `init` as `--test-command`; it is stored once and every later step reads it
 from the state file.
+
+**Dispatch Infrastructure before the Architect and Coders if the environment needs setup.**
+If the project requires dependency installation, tooling configuration, directory scaffolding,
+or any other environment preparation, the Manager dispatches the **Infrastructure** agent
+(`Infrastructure`) first. The Manager refers all scaffolding and infrastructure build/setup
+to this agent — never attempting to set up the environment itself. The Infrastructure agent
+ensures the environment is correct, follows all guidelines, and maintains proper security.
 
 ### Step 3: Architect devises the architecture
 
@@ -482,9 +490,10 @@ owns the decision**, which then decides and keeps the loop turning. Stop and ask
 | `config/buildloop.json` | Run config: `agent_framework` (default `herdr`), the per-model `concurrency_budget`, and `auto_approve` (add `--auto` to agent starts). Read before dispatching |
 | `scripts/buildloop.py` | Task state, dependency scheduling, attempt cap. `--help` for the full interface |
 | `references/agent-prompt.md` | The task and re-prompt templates. Read before writing either |
-| `references/roles-and-levels.md` | The five roles, role→model→budget mapping, developer ladder, escalation thresholds, and loop decision tables. Read before dispatching any role |
+| `references/roles-and-levels.md` | The six roles, role→model→budget mapping, developer ladder, escalation thresholds, and loop decision tables. Read before dispatching any role |
 | `references/roles/project-sponsor.md` | Project-Sponsor briefing — paste at the top of its prompt |
 | `references/roles/architect.md` | Architect briefing (initial pass + remediation) |
+| `references/roles/infrastructure.md` | Infrastructure briefing — paste at the top of its prompt |
 | `references/roles/coder.md` | Coder briefing — substitute the Architect's level |
 | `references/roles/tester.md` | Tester/QA briefing |
 | `references/roles/manager.md` | Manager seat (this session; no briefing to send) |
