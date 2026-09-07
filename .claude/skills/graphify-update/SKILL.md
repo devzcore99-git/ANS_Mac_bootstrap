@@ -1,5 +1,6 @@
 ---
 name: graphify-update
+version: 1.0.0
 description: >-
   Build or refresh a project's graphify code graph — a first extract when there
   is none, an incremental update when there is — then report what the map now
@@ -7,11 +8,8 @@ description: >-
   the path to GRAPH_REPORT.md. Deterministic and offline, no API key and no LLM
   call. Use when the user asks to update, rebuild, or refresh the code graph,
   to graphify or re-graphify a project, to map or re-map a codebase, or to get
-  the graph current before asking questions about the code — including
-  phrasings like "run graphify here", "update the graph", or "build me a map of
-  this repo". Not for querying a graph that already exists, which is
-  `graphify query` directly, and not needed before /projects-recommendations or
-  /projects-features-suggest, which refresh their own graphs.
+  the graph current before asking questions about the code. Not for querying a
+  graph that already exists.
 ---
 
 # Graphify Update

@@ -1,5 +1,6 @@
 ---
 name: projects-features-suggest
+version: 1.0.0
 description: >-
   Propose new features for workspace projects with a stack-matched expert and write a
   features.md into each, covering capabilities the project does not have yet — core,
@@ -7,8 +8,7 @@ description: >-
   still wanted, built, or declined, so a re-run never re-proposes something already
   turned down. Runs on one project or batched across the whole workspace. Use when the
   user wants feature ideas, asks what to build next, asks what a project is missing or
-  could grow into, wants a roadmap, or wants to see the ideas already proposed. For
-  defects, cleanups, and performance work use projects-recommendations instead.
+  could grow into, wants a roadmap, or wants to see the ideas already proposed.
 ---
 
 # Project Feature Suggestions
@@ -32,9 +32,7 @@ exclusion. Do not re-derive any of that by hand.
 ## Run the script
 
 Paths below use `$SKILL_DIR` — the base directory printed when this skill
-loads. It is not a real environment variable: substitute the printed path, or
-set it inline in the same command (`SKILL_DIR=... python3 "$SKILL_DIR/..."`),
-because shell state does not persist between calls.
+loads. Substitute the printed path or set it inline in the same command.
 
 ```bash
 # macOS / Linux
@@ -78,17 +76,11 @@ with `_lib/` and `/graphify-update`, which it imports. `bundled_skills` in
 `/project-bootstrap-audit --audit-skills` reports any project whose copy is
 missing or has drifted, and `--update-skills` refreshes it.
 
-Copied, never symlinked: most projects open in a devpod, where the workspace
-root does not exist and a link into `~/AI_Projects` resolves to nothing. The
-same holds in a fresh clone, in CI, and on Windows.
+Copied, never symlinked: most projects open in a devpod where the workspace
+root does not exist and links resolve to nothing.
 
-**A copy scopes itself to the repository it sits in.** `skills_config.json` is
-a file beside the bundled directories rather than inside one, so it is never
-copied, and without it the script falls back to the repository it was copied
-into: `scan` reports one project and `scope: project` instead of the whole
-workspace. That is the only honest answer in a devpod, where nothing above the
-repository exists. For the full sweep, run it from `ASST_BBMax`, which has the
-config — or pass `--root ~/AI_Projects` anywhere.
+**A copy scopes itself to the repository it sits in.** Without `skills_config.json`
+the script falls back to the repository it was copied into.
 
 ## Report states
 
@@ -261,21 +253,7 @@ section, nothing unplaced.
 The test is whether it is work the user could pick up. Open ideas are
 actionable; the record of what has already shipped or been turned down is not.
 
-Separate the two sections with **two horizontal rules**, so the break is
-unmissable when the report is skimmed in a terminal. Emit them exactly like
-this — blank lines around each rule, and a blank line between them, or the
-renderer collapses the pair into one rule and reads the first as a heading
-underline:
-
-```markdown
-...last line of the Actionable section.
-
----
-
----
-
-## Non-Actionable
-```
+Separate the two sections with **two horizontal rules**:
 
 ## View mode
 

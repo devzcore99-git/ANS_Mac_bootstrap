@@ -362,7 +362,22 @@ def load_levels(override: str | None = None) -> dict:
     default = str(data.get("default_level") or "").strip().lower() or ladder[0]["level"]
     if not any(default == e["level"] or default in e["aliases"] for e in ladder):
         die(f"Error: {path}: default_level {default!r} is not one of the levels defined there.")
-    return {"source": str(path), "default_level": default, "ladder": ladder}
+
+    # The manager sits OUTSIDE `levels` on purpose: it is the orchestrator seat,
+    # not a rung, so it must not be dispatchable by `--level` and must not shift
+    # what "one level up" means. Reported, never ranked.
+    manager = data.get("manager")
+    if manager is not None:
+        if not isinstance(manager, dict) or not str(manager.get("model") or "").strip():
+            die(f'Error: {path}: "manager", when present, must be an object with a "model".')
+        manager = dict(manager)
+        manager["model"] = str(manager["model"]).strip()
+    return {
+        "source": str(path),
+        "default_level": default,
+        "ladder": ladder,
+        "manager": manager,
+    }
 
 
 def pick_level(name: str, levels: dict) -> dict:
@@ -399,6 +414,35 @@ def config_default_model() -> tuple[str | None, Path | None]:
         return None, cfg
     model = data.get("model")
     return (model if isinstance(model, str) else None), cfg
+
+
+def global_agents() -> set[str]:
+    """Agent names opencode defines machine-wide, from both places it takes them.
+
+    The `agent` map in opencode.jsonc and the .md files in the global agent
+    directory. Project-local agents are deliberately not counted: the ladder is
+    machine-wide, so a level that only resolves inside one checkout is a level
+    that will fail somewhere else.
+
+    An empty set means "could not tell" — no config, or unreadable — and every
+    caller treats that as "do not report", never as "nothing is defined".
+    """
+    names: set[str] = set()
+    for name in ("opencode.jsonc", "opencode.json"):
+        cfg = Path.home() / ".config" / "opencode" / name
+        if not cfg.exists():
+            continue
+        try:
+            data = json.loads(strip_jsonc(cfg.read_text()))
+        except (json.JSONDecodeError, OSError):
+            continue
+        agent = data.get("agent")
+        if isinstance(agent, dict):
+            names.update(str(k) for k in agent)
+    root = Path.home() / ".config" / "opencode" / "agent"
+    if root.is_dir():
+        names.update(md.stem for md in root.glob("*.md"))
+    return names
 
 
 def discover_agents(project: Path) -> list[dict]:
@@ -466,7 +510,23 @@ def cmd_levels(args: argparse.Namespace) -> int:
             EX_PREFLIGHT,
         )
     models = list_models()
+    agents = global_agents()
     problems: list[str] = []
+
+    def check_agent(where: str, name) -> None:
+        """An agent name that does not resolve is the /herdr-agents failure mode.
+
+        The TUI has no --variant flag, so the agent definition is the only place
+        the reasoning effort can come from there. A name that is not defined
+        starts opencode on its default model and effort instead — silently.
+        """
+        if name and agents and name not in agents:
+            problems.append(
+                f"{where} names agent {name!r}, which `opencode agent list` does not "
+                "define — add it to opencode.jsonc or drop the key. /herdr-agents "
+                "cannot set a variant without it."
+            )
+
     ladder = []
     for e in levels["ladder"]:
         known = (e["model"] in models) if models else None
@@ -475,24 +535,44 @@ def cmd_levels(args: argparse.Namespace) -> int:
                 f"level {e['level']!r} names model {e['model']!r}, which is not in "
                 "`opencode models` — fix the id or drop the level."
             )
+        check_agent(f"level {e['level']!r}", e.get("agent"))
+        for variant, name in (e.get("agents") or {}).items():
+            check_agent(f"level {e['level']!r} variant {variant!r}", name)
         ladder.append({
             "level": e["level"],
             "rank": e["rank"],
             "aliases": e["aliases"],
             "model": e["model"],
             "available": known,
+            "variant": e.get("variant"),
+            "agent": e.get("agent"),
+            "agents": e.get("agents", {}),
             "summary": e.get("summary"),
             "use_for": e.get("use_for", []),
             "avoid_for": e.get("avoid_for", []),
             "context_limit": e.get("context_limit"),
             "timeout": e.get("timeout"),
         })
+
+    manager = levels.get("manager")
+    if manager is not None:
+        known = (manager["model"] in models) if models else None
+        if known is False:
+            problems.append(
+                f"manager names model {manager['model']!r}, which is not in "
+                "`opencode models` — fix the id."
+            )
+        check_agent("manager", manager.get("agent"))
+        manager = dict(manager, available=known)
+
     if not models:
         problems.append("`opencode models` returned nothing, so no id could be verified.")
     emit({
         "source": levels["source"],
         "searched": [str(c) for c in LEVELS_SOURCES],
         "default_level": levels["default_level"],
+        # Not a rung — reported beside the ladder, never inside it.
+        "manager": manager,
         "ladder": ladder,
         "problems": problems,
         "ok": not problems,

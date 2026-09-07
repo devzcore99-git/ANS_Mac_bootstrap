@@ -1,5 +1,5 @@
 {
-  // Which local model plays which developer level.
+  // Which local model plays which developer level, and at what reasoning effort.
   //
   // /opencode-agents and /herdr-agents both read this file to decide what to
   // start the harness with, so a task described as "senior work" resolves to a
@@ -24,20 +24,94 @@
   // host's — keep it as a sane default, not as your working copy.
   //
   // ORDER IS THE LADDER: most capable first. "one level down" and "escalate"
-  // mean a step along this array, so inserting a model in the right position is
-  // all that is needed — there is no rank field to keep in sync.
+  // mean a step along the `levels` array, so inserting a model in the right
+  // position is all that is needed — there is no rank field to keep in sync.
   //
-  // Every `model` must be a real id from `opencode models`. Only ham51-2/* are
+  // Every `model` must be a real id from `opencode models`. Only ham51/* are
   // the local endpoint; opencode/* is a hosted catalogue and does not belong
   // on this ladder.
+  //
+  // TWO WAYS TO REACH A RUNG, because the two runners differ:
+  //
+  //   `model` + `variant`  — for /opencode-agents, which runs `opencode run`
+  //                          and can pass `--model X --variant Y` directly.
+  //                          The flag beats opencode's stored variant.
+  //   `agent`              — for /herdr-agents, which starts the opencode TUI,
+  //                          and the TUI has NO --variant flag. An agent
+  //                          definition in opencode.jsonc is the only way to
+  //                          fix the effort there. `agents` maps a variant to
+  //                          the agent that carries it; empty means the model
+  //                          offers no effort dial.
+  //
+  // Both must stay in step with `agent` in ~/.config/opencode/opencode.jsonc.
 
   "default_level": "senior",
 
+  // The orchestrator seat — deliberately OUTSIDE `levels`, because it is not a
+  // rung. It is the model opencode defaults to via the top-level "model" key
+  // in opencode.jsonc (ham51/qwen3.6-35b-a3b-manager), so it is the model a human or
+  // agent gets when they open opencode without saying otherwise — plan the
+  // project here, dispatch the work to the rungs below.
+  //
+  // The manager is *not* the same model as senior. It is the mid coder
+  // (35B MoE, ~3B active) at thinking effort, with a shorter context limit
+  // (170K vs 160K+ on the coder rungs) so it stays fast at planning and
+  // prompt processing. It is a different model because the 35B MoE is fast
+  // enough for orchestration but not strong enough for complex coding — that
+  // is the point. Promoting a task from senior to manager buys no capability
+  // (the manager is actually the weaker model) and costs context: an
+  // escalation in name only. Keeping it out of the `levels` array is also what
+  // stops `--level manager` from dispatching task work to it.
+  //
+  // opencode.jsonc must have the same model as its top-level "model" key.
+  // /herdr-agents overrides the default when starting coder agents via
+  // `-- --agent <level>` which resolves to the level's model. The manager
+  // is never a task agent — it is the orchestrator seat only.
+  "manager": {
+    "model": "ham51/qwen3.6-35b-a3b-manager",
+    "variant": "thinking",
+    "agent": "manager",
+    "summary": "35B MoE (~3B active), thinking on. The manager: plans the work, shapes the tasks, and dispatches to the ladder rather than reading the tree itself. Different model from senior — not weaker by accident, by design: fast enough for orchestration, not strong enough for complex coding.",
+    "use_for": [
+      "planning a build, decomposing a PRD, deciding which rung each task deserves",
+      "reviewing what came back and deciding whether to re-dispatch"
+    ],
+    "avoid_for": [
+      "the coding tasks themselves — that is what the levels below are for",
+      "anything that has to read a lot of source at once; the short window is the point"
+    ],
+    "context_limit": 170000
+  },
+
   "levels": [
+    {
+      "level": "architect",
+      "aliases": ["arch", "design"],
+      "model": "ham51/qwen3.8-27b",
+      "variant": "xhigh",
+      "agent": "architect",
+      "agents": { "xhigh": "architect", "medium": "architect-medium", "low": "architect-low" },
+      "summary": "27B dense. Architect: creates software design, architecture, and documentation; decomposes requirements into implementation tasks; recommends which coder level to assign per task.",
+      "use_for": [
+        "creating the initial design and architecture for a new project or major feature",
+        "decomposing a PRD or spec into discrete, parallelizable implementation tasks",
+        "recommending coder level (senior / mid / junior) per task based on complexity",
+        "writing architecture docs, module boundaries, and inter-module contracts for coders to follow"
+      ],
+      "avoid_for": [
+        "writing production code — that is what the coder levels below are for",
+        "simple edits or mechanical work that does not need architectural judgment"
+      ],
+      "context_limit": 160000,
+      "timeout": 2400
+    },
     {
       "level": "senior",
       "aliases": ["sr", "senior-dev"],
-      "model": "ham51-2/qwen/qwen3.8-27b",
+      "model": "ham51/qwen3.8-27b",
+      "variant": "xhigh",
+      "agent": "senior",
+      "agents": { "xhigh": "senior", "medium": "senior-medium", "low": "senior-low" },
       "summary": "27B dense. Senior developer: holds an interface in its head across several files.",
       "use_for": [
         "a module whose correctness depends on an interface defined elsewhere",
@@ -53,7 +127,10 @@
     {
       "level": "mid",
       "aliases": ["middle", "mid-level"],
-      "model": "ham51-2/qwen/qwen3.6-35b-a3b",
+      "model": "ham51/qwen3.6-35b-a3b",
+      "variant": "thinking",
+      "agent": "mid",
+      "agents": { "thinking": "mid", "none": "mid-fast" },
       "summary": "35B MoE, ~3B active. Mid-level developer: fast, competent on a well-stated task.",
       "use_for": [
         "one module against a spec you wrote out",
@@ -69,7 +146,12 @@
     {
       "level": "junior",
       "aliases": ["jr", "junior-dev"],
-      "model": "ham51-2/qwen/qwen3.5-9b",
+      "model": "ham51/qwen3.5-9b",
+      // No `variants` block on this model in opencode.jsonc, so there is no
+      // effort dial to set. null says "none offered", not "left unset".
+      "variant": null,
+      "agent": "junior",
+      "agents": { },
       "summary": "9B. Junior developer: the narrowest of the three, and the one every measurement in references/context-budget.md was taken against.",
       "use_for": [
         "mechanical, fully specified edits — rename, extract, add a docstring",
@@ -82,10 +164,30 @@
       // 128,000 is the only measured figure of the three: ~4,900 tokens of
       // fixed overhead plus ~1.9K per step, so roughly 60 tool calls. The two
       // above are provisional working budgets, not measurements — the endpoint
-      // declares 256,000 for both, but a declared window is not a useful
-      // reasoning span. Measure before raising them.
+      // declares 200,000 for senior and 262,144 for mid, but a declared window
+      // is not a useful reasoning span. Measure before raising them.
       "context_limit": 128000,
       "timeout": 1800
+    },
+    {
+      "level": "tester",
+      "aliases": ["test", "qa"],
+      "model": "ham51/qwen3.6-35b-a3b",
+      "variant": "thinking",
+      "agent": "tester",
+      "agents": { "thinking": "tester", "none": "tester-fast" },
+      "summary": "35B MoE, ~3B active. Tester: runs the test suite, analyzes failures, and writes remediation reports for the architect. Does not fix code — reports bugs and proposes fixes.",
+      "use_for": [
+        "running the test suite after coder agents complete and reporting pass/fail",
+        "analyzing test failures and writing structured remediation reports for the architect",
+        "writing standalone test files against a stated interface (attached to the prompt)"
+      ],
+      "avoid_for": [
+        "fixing broken code — that is the coder agents' job, after the architect remediates",
+        "anything that requires modifying production code outside tests"
+      ],
+      "context_limit": 160000,
+      "timeout": 2400
     }
   ]
 }
