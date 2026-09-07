@@ -212,6 +212,7 @@ def cmd_init(args) -> int:
                 "test_file": item.get("test_file", ""),
                 "depends_on": item.get("depends_on", []),
                 "acceptance": item["acceptance"],
+                "level": item.get("level", "mid"),
                 "status": "pending",
                 "attempts": 0,
                 "last_failure": None,
