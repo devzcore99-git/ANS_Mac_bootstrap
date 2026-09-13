@@ -197,6 +197,45 @@
     //"STOCKDATA_DIR": "/workspaces/DBX_StockData"
   },
 
+  //Ports forwarded out of the container to the host.  Both ship EMPTY, and this
+  //file is where a project fills them in — there is no ports.txt beside
+  //firewall-allow.txt and packages.txt, and there cannot be one.  The
+  //devcontainer CLI reads THIS file to build the container, before any script
+  //in .devcontainer/ exists to be read from, so a port list has no runtime seam
+  //the way hosts and packages do.  Both keys are listed under [keys] in
+  //.project-owned instead, exactly like mounts and containerEnv, so whatever a
+  //project puts here survives --update-devcontainer.
+  //
+  //forwardPorts is container ports, as numbers or "host:container" strings.
+  //portsAttributes labels them and decides what happens when one opens; its
+  //keys are port numbers AS STRINGS, which is the one thing here that fails
+  //silently when you get it wrong — a bare number parses and does nothing.
+  //onAutoForward takes "notify" (the default), "openBrowser", "openPreview",
+  //"silent" or "ignore".
+  //
+  //  "forwardPorts": [3000, 5432],
+  //  "portsAttributes": {
+  //    "3000": { "label": "web", "onAutoForward": "openBrowser" },
+  //    "5432": { "label": "postgres", "onAutoForward": "silent" }
+  //  },
+  //
+  //This is VS Code / devcontainer CLI forwarding, NOT docker -p publishing: the
+  //server inside the container connects to the port on loopback and tunnels it
+  //back over the connection that is already open.  Two things follow.  The
+  //firewall does not interfere and no allow-list entry is needed —
+  //init-firewall.sh sets the INPUT policy to DROP, but accepts loopback well
+  //before that, so a forwarded port keeps working with the firewall on.  And a
+  //server bound to 127.0.0.1 forwards fine; it does not have to listen on
+  //0.0.0.0.  (A port published with -p through runArgs would be a different
+  //question, governed by the HOST_NETWORK rule instead.)
+  //
+  //VS Code also auto-forwards a port it notices a process listening on, so
+  //listing one here is about being deterministic — it is what the devcontainer
+  //CLI and DevPod need, since neither watches for new listeners — and about
+  //having somewhere to hang a label.
+  "forwardPorts": [],
+  "portsAttributes": {},
+
   //Install packages once, at container-create time.  Re-runs on a rebuild.
   //
   //The package NAMES are not here.  They live in packages.base.txt (the
