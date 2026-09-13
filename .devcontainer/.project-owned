@@ -26,6 +26,11 @@
 # later improvement to firewall-allow.txt would not. Only list a key projects
 # genuinely differ on.
 #
+# Every entry below carries an `Example:` block showing what editing that file
+# or key actually looks like. They are comments, like everything else starting
+# with `#` — the only lines this file parses are the bare names. Copy a shape
+# out of one; never uncomment it in place.
+#
 # The bar for adding one: a file a project is EXPECTED to edit. Everything
 # else, including anything a project merely might edit in a pinch, stays
 # boilerplate — the point of the split is that boilerplate can be refreshed
@@ -35,17 +40,50 @@
 # The firewall's project allow-list. The template ships it with comments and no
 # entries; a project adds the hosts it needs, and a refresh must not remove
 # them. This is the file the whole boilerplate/project split was built for.
+#
+#   Example — .devcontainer/firewall-allow.txt. One entry per line: a domain, a
+#   bare IPv4 address, or an IPv4 CIDR. Entries here are best-effort, so a typo
+#   warns and blocks that host rather than costing the container its boot.
+#
+#     api.polygon.io            # a data provider this project calls
+#     files.example-cdn.net     # a CDN an install step pulls from
+#     10.0.4.0/24               # an internal subnet
+#     192.168.12.51             # a single host by address
+#
+#   Apply without a rebuild:  sudo bash .devcontainer/init-firewall.sh
 firewall-allow.txt
 
 # This project's extra packages. Same contract as the allow-list above: the
 # template ships it with comments and no entries, the project fills it in, and
 # a refresh must not empty it.
+#
+#   Example — .devcontainer/packages.txt. Lines are `installer:package`, where
+#   installer is apt, npm or pip. Pin a version wherever the installer takes
+#   one. These install into the CONTAINER, globally; a dependency of this
+#   project's own code belongs in its manifest and in setup.sh below.
+#
+#     apt:ripgrep               # a CLI tool
+#     apt:libpq-dev             # a build-time system library
+#     npm:typescript@5.4.5      # a pinned global npm tool
+#     pip:ruff==0.6.9           # a pinned Python tool
+#
+#   Apply without a rebuild:  bash .devcontainer/install-packages.sh
 packages.txt
 
 # The project setup hook - venv creation, permission fixes, anything a package
 # list cannot express. Ships as a no-op; whatever a project puts in it is the
 # one create-time step the template has no opinion about, so it is never
 # overwritten.
+#
+#   Example — .devcontainer/setup.sh. It ships with the shebang, `set -euo
+#   pipefail`, a $WORKSPACE pointing at the repo root, and npm already on PATH,
+#   so a project appends the steps themselves. More shapes are commented out in
+#   the file itself.
+#
+#     python3 -m venv "$WORKSPACE/.venv"
+#     "$WORKSPACE/.venv/bin/pip" install -q -e "$WORKSPACE[dev]"
+#
+#   Apply without a rebuild:  bash .devcontainer/setup.sh
 setup.sh
 
 [keys]
@@ -53,6 +91,13 @@ setup.sh
 # The project's own name. Preserved on every refresh and rewritten immediately
 # when devcontainer.json is replaced - without this, every project would read as
 # permanently drifted from the template and a refresh would be meaningless.
+#
+#   Example — devcontainer.json:
+#
+#     "name": "CODE_MyProject",
+#
+#   Set by /project-bootstrap from the directory name; there is rarely a reason
+#   to edit it by hand.
 name
 
 # Bind mounts and volumes. The one thing a project reliably needs that has no
@@ -67,6 +112,21 @@ name
 #   - `${localWorkspaceFolder}` and `${localEnv:VAR}` both substitute here. Use
 #     them rather than an absolute path: this workspace is used from two
 #     machines whose home directories differ.
+#
+#   Example — devcontainer.json. ADD to the array, never replace it: the
+#   entries already there carry the Claude Code credentials volume, the gh
+#   token, this template's host config and the SOPS age key, and dropping one
+#   breaks that integration with no error.
+#
+#     "mounts": [
+#       "source=claude-code-config,target=/home/vscode/.claude,type=volume",
+#       "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,readonly",
+#       "source=${localEnv:HOME}/.config/devcontainer,target=/home/vscode/.config/devcontainer,type=bind,readonly",
+#       "source=${localEnv:HOME}/.config/sops,target=/home/vscode/.config/sops,type=bind,readonly",
+#       "source=${localWorkspaceFolder}/../DBX_StockData,target=/workspaces/DBX_StockData,type=bind"
+#     ],
+#
+#   Needs a Rebuild Container — mounts are fixed when the container is created.
 mounts
 
 # Per-project environment variables. Same latent need as mounts - the template
@@ -76,4 +136,59 @@ mounts
 # INIT_FIREWALL toggle and OPENCODE_CONFIG all live in this block, and they
 # freeze at whatever the project has today. Keep them; a project adding a
 # variable should add to the block, never replace it.
+#
+#   Example — devcontainer.json. ADD to the block, never replace it. The three
+#   the template ships are load-bearing: CLAUDE_CONFIG_DIR puts the OAuth file
+#   in the mounted volume, INIT_FIREWALL is the firewall's only toggle, and
+#   OPENCODE_CONFIG is the path postStartCommand links opencode's config to.
+#
+#     "containerEnv": {
+#       "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+#       "INIT_FIREWALL": "true",
+#       "OPENCODE_CONFIG": "/home/vscode/.opencode-config.json",
+#       "STOCKDATA_DIR": "/workspaces/DBX_StockData"
+#     },
+#
+#   Needs a Rebuild Container. Set INIT_FIREWALL to "false" to boot with open
+#   egress; it is read at postStartCommand, not through sudo.
 containerEnv
+
+# Forwarded ports, and their labels. A project is expected to edit these — a web
+# app, an API, a database, a debugger — and like mounts they have no runtime
+# seam: the devcontainer CLI reads devcontainer.json before any script in this
+# directory exists to be read from, so there is no ports.txt for them to come
+# from the way hosts come from firewall-allow.txt. That is the whole reason they
+# are keys.
+#
+# The template ships both EMPTY (`[]` and `{}`), so a project that forwards
+# nothing is identical to the template here and a refresh is a no-op for it.
+#
+# Two keys rather than one because portsAttributes is useful without
+# forwardPorts — it labels a port VS Code auto-forwarded — and a refresh that
+# preserved one and dropped the other would be worse than preserving neither.
+#
+#   Example — devcontainer.json:
+#
+#     "forwardPorts": [3000, 5432],
+#     "portsAttributes": {
+#       "3000": { "label": "web",      "onAutoForward": "openBrowser" },
+#       "5432": { "label": "postgres", "onAutoForward": "silent" }
+#     },
+#
+#   forwardPorts takes container ports as numbers, or "host:container" strings
+#   to land on a different host port. onAutoForward takes "notify" (the
+#   default), "openBrowser", "openPreview", "silent" or "ignore".
+#
+#   The portsAttributes keys are port numbers AS STRINGS. A bare 3000 there is
+#   valid JSON and silently does nothing — it is the one mistake in this file
+#   that reports no error at all.
+#
+#   No firewall entry is needed: forwarding is a loopback tunnel out of the VS
+#   Code server, not docker -p publishing, and init-firewall.sh accepts lo well
+#   before the INPUT policy flips to DROP. A server bound to 127.0.0.1 forwards
+#   fine; it does not have to listen on 0.0.0.0.
+#
+#   Applied on Reload Window — unlike mounts and containerEnv above, these two
+#   do not need a Rebuild Container.
+forwardPorts
+portsAttributes
