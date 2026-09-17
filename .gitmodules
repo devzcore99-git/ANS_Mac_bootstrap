@@ -1,0 +1,32 @@
+[submodule ".claude/skills/_lib"]
+	path = .claude/skills/_lib
+	url = https://github.com/devzcore99-git/LIB_skills.git
+	branch = master
+[submodule ".claude/skills/build-loop"]
+	path = .claude/skills/build-loop
+	url = https://github.com/devzcore99-git/SKILL_build-loop.git
+	branch = master
+[submodule ".claude/skills/herdr-agents"]
+	path = .claude/skills/herdr-agents
+	url = https://github.com/devzcore99-git/SKILL_herdr-agents.git
+	branch = master
+[submodule ".claude/skills/opencode-agents"]
+	path = .claude/skills/opencode-agents
+	url = https://github.com/devzcore99-git/SKILL_opencode-agents.git
+	branch = master
+[submodule ".claude/skills/build-loop-recommend-build"]
+	path = .claude/skills/build-loop-recommend-build
+	url = https://github.com/devzcore99-git/SKILL_build-loop-recommend-build.git
+	branch = master
+[submodule ".claude/skills/graphify-update"]
+	path = .claude/skills/graphify-update
+	url = https://github.com/devzcore99-git/SKILL_graphify-update.git
+	branch = master
+[submodule ".claude/skills/projects-recommendations"]
+	path = .claude/skills/projects-recommendations
+	url = https://github.com/devzcore99-git/SKILL_projects-recommendations.git
+	branch = master
+[submodule ".claude/skills/projects-features-suggest"]
+	path = .claude/skills/projects-features-suggest
+	url = https://github.com/devzcore99-git/SKILL_projects-features-suggest.git
+	branch = master
