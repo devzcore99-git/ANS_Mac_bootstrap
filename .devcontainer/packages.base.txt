@@ -39,6 +39,28 @@ apt:iproute2
 # verified SHA-256 per architecture, exactly like herdr below.
 apt:age
 
+# --- Testing ---------------------------------------------------------------
+# pytest, so `pytest` is on PATH in every container without per-project setup.
+#
+# An apt line rather than `pip:pytest`, and that is not a style preference: the
+# python feature defaults to `os-provided`, so python3 is Ubuntu's and is PEP
+# 668 externally-managed, where a plain `python3 -m pip install` REFUSES. This
+# list is fail-closed, so a pip: line here would not degrade - it would abort
+# the create of every project built from this template. (install-graphify.sh
+# reaches for pipx for the same reason; that is not an option for pytest, whose
+# whole job is to import the code under test, which a pipx venv cannot see.)
+#
+# python3-pytest is arch-independent and ships /usr/bin/pytest, not just the
+# versioned pytest-3, so no symlink or alias is needed. Same bargain as age
+# above: in the archive, patched by Ubuntu, no pin to carry here.
+#
+# KNOW THE LIMIT: this is the SYSTEM python's pytest. Where a project has its
+# own .venv - which .claude/rules/workspace.md tells every project to use - it
+# cannot import that project's dependencies, and the right command is still
+# `.venv/bin/pytest` or `uv run pytest`. What this buys is an ad-hoc run and a
+# project that has no venv, not a replacement for one.
+apt:python3-pytest
+
 # --- Shell niceties --------------------------------------------------------
 # fastfetch prints the OS / kernel / CPU / memory summary beside an ASCII logo.
 #
