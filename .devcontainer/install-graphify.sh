@@ -2,10 +2,11 @@
 #
 # Install graphify (the `graphifyy` PyPI package) into the container.
 #
-# Run once from postCreateCommand, as `vscode`. Not on the start path: like
-# install-herdr.sh beside it this does not need to re-run when a stopped
-# container comes back, and it reaches the network, which the firewall has no
-# reason to be holding open on every boot.
+# Run at image build (Dockerfile, as root, with --image) and again from
+# postCreateCommand (as `vscode`) — see "Two callers" below. Not on the start
+# path: like install-herdr.sh beside it this does not need to re-run when a
+# stopped container comes back, and it reaches the network, which the firewall
+# has no reason to be holding open on every boot.
 #
 # graphify turns a repository into a queryable knowledge graph — symbols, calls,
 # imports and communities, extracted from the AST. The workspace rule set every
@@ -66,6 +67,24 @@ set -euo pipefail
 # deliberate edit to this file. Latest is at https://pypi.org/project/graphifyy/.
 GRAPHIFY_VERSION="0.9.49"
 
+# Two callers, one script. The Dockerfile runs it with --image while the image is
+# built, so graphify and its ~25 dependencies land in a cached layer every
+# project shares. That runs BEFORE any feature, so the python feature's pipx and
+# PIPX_BIN_DIR do not exist yet: image mode takes pipx from the Ubuntu archive
+# instead and installs into /opt/pipx, with the CLI linked into /usr/local/bin,
+# which is on PATH for every shell and hook without help. Still pipx, still its
+# own venv, still off the externally-managed system python — just not the
+# feature's copy. postCreateCommand runs it bare, which finds the pinned version
+# on PATH and stops; when the image step failed (it is non-fatal there too), the
+# bare run installs it the original way, through the feature's pipx.
+if [ "${1:-}" = "--image" ]; then
+    export PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin
+    if ! command -v pipx >/dev/null 2>&1; then
+        echo "[graphify] installing pipx from the Ubuntu archive"
+        apt-get install -y --no-install-recommends pipx
+    fi
+fi
+
 # The python feature's own paths, from its containerEnv. Restated rather than
 # inherited: some runners (DevPod) execute lifecycle hooks through a switch to
 # the remote user where PAM resets PATH to the login.defs default, and a hook
@@ -74,6 +93,12 @@ GRAPHIFY_VERSION="0.9.49"
 export PIPX_HOME="${PIPX_HOME:-/usr/local/py-utils}"
 export PIPX_BIN_DIR="${PIPX_BIN_DIR:-$PIPX_HOME/bin}"
 export PATH="/usr/local/python/current/bin:$PIPX_BIN_DIR:$PATH"
+
+if [ "${1:-}" != "--image" ] && have="$(graphify --version 2>/dev/null)" &&
+   [[ "$have" == *"$GRAPHIFY_VERSION"* ]]; then
+    echo "[graphify] ${have} already installed (from the image)"
+    exit 0
+fi
 
 echo "[graphify] installing graphifyy==${GRAPHIFY_VERSION}"
 

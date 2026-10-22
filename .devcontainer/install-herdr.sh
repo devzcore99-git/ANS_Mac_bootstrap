@@ -2,10 +2,11 @@
 #
 # Install herdr (https://herdr.dev) and its Claude Code / opencode integrations.
 #
-# Run once from postCreateCommand, as `vscode` with passwordless sudo. Not on
-# the start path: unlike init-firewall.sh this does not need to re-run when a
-# stopped container comes back, and it reaches the network, which the firewall
-# has no reason to be holding open on every boot.
+# Run at image build (Dockerfile, as root) and again from postCreateCommand (as
+# `vscode` with passwordless sudo) — see "Two callers" below. Not on the start
+# path: unlike init-firewall.sh this does not need to re-run when a stopped
+# container comes back, and it reaches the network, which the firewall has no
+# reason to be holding open on every boot.
 #
 # herdr is a terminal workspace manager for coding agents — it keeps agent
 # panes alive across detach, and `/herdr-agents` (in ASST_BBMax) drives opencode
@@ -55,48 +56,64 @@ SHA256_AARCH64="f55610658e1c2e0d2aaef730b4b2ab885f7f8ba00285ab372bfb14f2e3d5b40d
 # than silently drifting off the pin above.
 INSTALL_PATH="/usr/local/bin/herdr"
 
-arch="$(uname -m)"
-case "$arch" in
-    x86_64)          asset="linux-x86_64";  want_sha="$SHA256_X86_64" ;;
-    aarch64 | arm64) asset="linux-aarch64"; want_sha="$SHA256_AARCH64" ;;
-    *)
-        echo "ERROR: no herdr build pinned for architecture '$arch'"
-        exit 1
-        ;;
-esac
+# Two callers, one script. The Dockerfile runs it with --binary-only while the
+# image is built, so the download and checksum land in a cached layer every
+# project shares; postCreateCommand runs it bare, which finds the pinned binary
+# already in place and goes straight to the agent integrations, which write into
+# the mounted ~/.claude volume and so can only run in the container. When the
+# image step failed (it is non-fatal there too) the bare run downloads it after
+# all, so a vendor outage at build time costs nothing a create cannot make up.
+binary_only=false
+[ "${1:-}" = "--binary-only" ] && binary_only=true
 
-url="https://github.com/herdrdev/herdr/releases/download/v${HERDR_VERSION}/herdr-${asset}"
+if have="$("$INSTALL_PATH" --version 2>/dev/null)" && [[ "$have" == *"$HERDR_VERSION"* ]]; then
+    echo "[herdr] ${have} already installed (from the image)"
+else
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64)          asset="linux-x86_64";  want_sha="$SHA256_X86_64" ;;
+        aarch64 | arm64) asset="linux-aarch64"; want_sha="$SHA256_AARCH64" ;;
+        *)
+            echo "ERROR: no herdr build pinned for architecture '$arch'"
+            exit 1
+            ;;
+    esac
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+    url="https://github.com/herdrdev/herdr/releases/download/v${HERDR_VERSION}/herdr-${asset}"
 
-echo "[herdr] downloading v${HERDR_VERSION} (${asset})"
-# --retry rides out a transient 5xx from the release CDN; the timeouts keep a
-# hung connection from stalling container create indefinitely. The binary is
-# ~21 MB, so --max-time is generous rather than tight.
-curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 -o "$tmp/herdr" "$url"
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
 
-# Verify BEFORE anything is made executable or moved onto PATH. sha256sum -c
-# exits non-zero on a mismatch, and `set -e` turns that into an aborted install
-# with the downloaded file still confined to $tmp.
-echo "[herdr] verifying SHA-256"
-printf '%s  %s\n' "$want_sha" "$tmp/herdr" | sha256sum -c -
+    echo "[herdr] downloading v${HERDR_VERSION} (${asset})"
+    # --retry rides out a transient 5xx from the release CDN; the timeouts keep a
+    # hung connection from stalling container create indefinitely. The binary is
+    # ~21 MB, so --max-time is generous rather than tight.
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 -o "$tmp/herdr" "$url"
 
-echo "[herdr] installing to ${INSTALL_PATH}"
-sudo install -o root -g root -m 0755 "$tmp/herdr" "$INSTALL_PATH"
+    # Verify BEFORE anything is made executable or moved onto PATH. sha256sum -c
+    # exits non-zero on a mismatch, and `set -e` turns that into an aborted install
+    # with the downloaded file still confined to $tmp.
+    echo "[herdr] verifying SHA-256"
+    printf '%s  %s\n' "$want_sha" "$tmp/herdr" | sha256sum -c -
 
-# Smoke test that also catches a pin/asset mismatch: a binary that runs but
-# reports a version other than the one requested means latest.json moved under
-# the digests above.
-installed="$("$INSTALL_PATH" --version)"
-echo "[herdr] installed: ${installed}"
-case "$installed" in
-    *"$HERDR_VERSION"*) ;;
-    *)
-        echo "ERROR: installed binary reports '${installed}', expected ${HERDR_VERSION}"
-        exit 1
-        ;;
-esac
+    echo "[herdr] installing to ${INSTALL_PATH}"
+    sudo install -o root -g root -m 0755 "$tmp/herdr" "$INSTALL_PATH"
+
+    # Smoke test that also catches a pin/asset mismatch: a binary that runs but
+    # reports a version other than the one requested means latest.json moved under
+    # the digests above.
+    installed="$("$INSTALL_PATH" --version)"
+    echo "[herdr] installed: ${installed}"
+    case "$installed" in
+        *"$HERDR_VERSION"*) ;;
+        *)
+            echo "ERROR: installed binary reports '${installed}', expected ${HERDR_VERSION}"
+            exit 1
+            ;;
+    esac
+fi
+
+[ "$binary_only" = true ] && exit 0
 
 # Agent integrations.
 #

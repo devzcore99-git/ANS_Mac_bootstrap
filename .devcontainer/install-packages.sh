@@ -28,9 +28,20 @@
 # The prefix is required. It is what lets one line say everything - which is
 # also why a diff or an error message about a single line is self-explanatory.
 #
-# Runs from onCreateCommand, which is AFTER devcontainer features are installed
-# (so node and python exist) and BEFORE postStartCommand raises the firewall
-# (so nothing here needs an allow-list entry). Once the firewall is up, apt and
+# Runs in two halves, chosen by the first argument:
+#
+#   base      the Dockerfile, as root, while the image is built - so the base
+#             set is a cached layer every project shares, and a failure fails
+#             the build, which is this file's fail-closed rule in build form.
+#             That is BEFORE any feature, so node and pip do not exist yet:
+#             packages.base.txt may hold apt: lines only (check.sh asserts it).
+#   project   onCreateCommand, AFTER features (so node and python exist) and
+#             BEFORE postStartCommand raises the firewall (so nothing here
+#             needs an allow-list entry). packages.txt is never copied into
+#             the image: it differs per project, and copying it in would give
+#             every project its own image instead of one shared cache.
+#
+# With no argument it does both, which is what a hand re-run wants. Once the firewall is up, apt and
 # the registries still work - archive.ubuntu.com, registry.npmjs.org and
 # pypi.org are in firewall-allow.base.txt - but a package from anywhere else
 # needs a matching line in firewall-allow.txt, or it hangs on connect.
@@ -157,7 +168,13 @@ install_collected() {
     APT=(); NPM=(); PIP=()
 }
 
-if [ ! -f "$BASE_FILE" ]; then
+MODE="${1:-all}"
+case "$MODE" in
+    all | base | project) ;;
+    *) echo "ERROR: unknown mode '$MODE' (expected base, project or nothing)"; exit 1 ;;
+esac
+
+if [ "$MODE" != project ] && [ ! -f "$BASE_FILE" ]; then
     echo "ERROR: Missing $BASE_FILE"
     echo "       It carries the firewall's own tooling; without it the container"
     echo "       cannot raise its egress policy. Restore it from DEV-TEMPLATE."
@@ -167,11 +184,22 @@ fi
 # Two passes rather than one combined transaction, so the base set keeps its
 # fail-closed behaviour even when a project entry is broken. A single apt call
 # holding both would fail as a unit and take the base packages down with it.
-echo "[packages] reading $BASE_FILE"
-read_package_file "$BASE_FILE" true
-install_collected true
+if [ "$MODE" != project ]; then
+    echo "[packages] reading $BASE_FILE"
+    read_package_file "$BASE_FILE" true
+    # The image build runs this before any feature exists, so an npm: or pip:
+    # line here would fail every build with "command not found" - say why.
+    if [ "$MODE" = base ] && [ $((${#NPM[@]} + ${#PIP[@]})) -gt 0 ]; then
+        echo "ERROR: packages.base.txt may hold apt: lines only - it is installed"
+        echo "       at image build, before the node and python features exist."
+        exit 1
+    fi
+    install_collected true
+fi
 
-if [ -f "$PROJECT_FILE" ]; then
+if [ "$MODE" = base ]; then
+    :
+elif [ -f "$PROJECT_FILE" ]; then
     echo "[packages] reading $PROJECT_FILE"
     read_package_file "$PROJECT_FILE" false
     install_collected false

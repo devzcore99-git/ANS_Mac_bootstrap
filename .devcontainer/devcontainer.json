@@ -1,11 +1,22 @@
 {
   "name": "ANS_Mac_bootstrap",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  //Built from .devcontainer/Dockerfile rather than pulled as a bare image: the
+  //Dockerfile is mcr.microsoft.com/devcontainers/base:ubuntu plus the base
+  //package list, sops, herdr and graphify, baked into layers every project
+  //shares through the build cache instead of re-installed on every create.
+  //Features below are applied ON TOP of it.  See the Dockerfile's header for
+  //what may and may not move there.
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
   "features": {
     "ghcr.io/devcontainers/features/node:2.1.0": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
-    "ghcr.io/devcontainers/features/python:1": {},
+    //installTools off: the feature's twelve linters/formatters are baked into
+    //the image, pinned, by install-python-tools.sh instead - see that file.
+    "ghcr.io/devcontainers/features/python:1": { "installTools": false },
     //"ghcr.io/devcontainers/features/rust:1": {},
     //"ghcr.io/devcontainers/features/powershell:2": {},
     //"ghcr.io/devcontainers/features/azure-cli:1": {}
@@ -245,13 +256,14 @@
   //a project adds software by editing a text file, never by editing this
   //file, which --update-devcontainer overwrites wholesale.
   //
-  //This runs AFTER features (so node and python exist) and BEFORE
+  //The base set is no longer installed here: the Dockerfile runs
+  //`install-packages.sh base` at image build, where a failure fails the build
+  //(the same fail-closed rule).  What runs here is `project` - packages.txt
+  //only - AFTER features (so node and python exist) and BEFORE
   //postStartCommand raises the firewall (so nothing here needs an allow-list
-  //entry).  It stays on the fatal chain: the base set is the firewall's own
-  //tooling, and a container that cannot raise its egress policy is broken in
-  //a way worth stopping for.  Project entries inside it are best-effort and
-  //warn instead - the script, not this string, decides which is which.
-  "onCreateCommand": "/bin/bash ${containerWorkspaceFolder}/.devcontainer/install-packages.sh",
+  //entry).  Still on the fatal chain, though project entries are best-effort
+  //and warn instead - the script, not this string, decides which is which.
+  "onCreateCommand": "/bin/bash ${containerWorkspaceFolder}/.devcontainer/install-packages.sh project",
 
   //Make sure the mounted directory can be read properly, then install opencode.
   //opencode ships as an npm package that pulls a prebuilt binary for the
@@ -294,6 +306,15 @@
   //container".  The chown keeps its && and stays fatal: it governs the mounted
   //Claude Code credentials, and a container whose credentials are unreadable
   //is broken in a way worth stopping for.
+  //
+  //herdr, graphify and sops are baked into the image by the Dockerfile.  They
+  //are still called below, and that is not redundant: each script finds its
+  //pinned version already in place and skips the download, then does the part
+  //that needs the container - herdr's integrations into the mounted ~/.claude,
+  //sops' report on the mounted age key.  When an image step failed (it is
+  //non-fatal there too), the same call installs the tool the original way.
+  //The downloads the paragraphs below describe now normally happen at build.
+  //
   //herdr is installed last, by .devcontainer/install-herdr.sh.  It is a script
   //rather than another clause here because it has real logic — pick the asset
   //for the container's architecture, verify a SHA-256, then install the Claude
@@ -355,7 +376,7 @@
   //NOT on the fatal chain for the same reason opencode and herdr are not: a
   //broken project hook should cost the container its setup, said out loud in
   //the create log, rather than cost you the container.
-  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-graphify.sh || echo \"[postCreate] WARNING: graphify install failed; the container is otherwise ready. Re-run .devcontainer/install-graphify.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-sops.sh || echo \"[postCreate] WARNING: sops install failed; the container is otherwise ready. Re-run .devcontainer/install-sops.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
+  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-graphify.sh || echo \"[postCreate] WARNING: graphify install failed; the container is otherwise ready. Re-run .devcontainer/install-graphify.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-sops.sh || echo \"[postCreate] WARNING: sops install failed; the container is otherwise ready. Re-run .devcontainer/install-sops.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-python-tools.sh || echo \"[postCreate] WARNING: python tools incomplete; the container is otherwise ready. Rebuild the image to get them.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
 
   //Two things on every start, in this order.
   //

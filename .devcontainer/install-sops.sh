@@ -3,10 +3,11 @@
 # Install sops (https://github.com/getsops/sops), the secrets editor that reads
 # the age key bound in at ~/.config/sops.
 #
-# Run once from postCreateCommand, as `vscode` with passwordless sudo. Not on
-# the start path: nothing here has to re-run when a stopped container comes
-# back, and it reaches the network, which the firewall has no reason to be
-# holding open on every boot.
+# Run at image build (Dockerfile, as root) and again from postCreateCommand (as
+# `vscode` with passwordless sudo) — see "Two callers" below. Not on the start
+# path: nothing here has to re-run when a stopped container comes back, and it
+# reaches the network, which the firewall has no reason to be holding open on
+# every boot.
 #
 # WHY A SCRIPT AND NOT A LINE IN packages.base.txt
 #
@@ -59,48 +60,64 @@ SHA256_AARCH64="53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77
 # binary cannot be replaced from inside the container without sudo.
 INSTALL_PATH="/usr/local/bin/sops"
 
-arch="$(uname -m)"
-case "$arch" in
-    x86_64)          asset="linux.amd64"; want_sha="$SHA256_X86_64" ;;
-    aarch64 | arm64) asset="linux.arm64"; want_sha="$SHA256_AARCH64" ;;
-    *)
-        echo "ERROR: no sops build pinned for architecture '$arch'"
-        exit 1
-        ;;
-esac
+# Two callers, one script. The Dockerfile runs it with --binary-only while the
+# image is built, so the download and checksum land in a cached layer every
+# project shares; postCreateCommand runs it bare, which finds the pinned binary
+# already in place and goes straight to reporting on the mounted age key, which
+# exists only in the container. When the image step failed (it is non-fatal
+# there too) the bare run downloads it after all, so a vendor outage at build
+# time costs nothing a create cannot make up.
+binary_only=false
+[ "${1:-}" = "--binary-only" ] && binary_only=true
 
-url="https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.${asset}"
+if have="$("$INSTALL_PATH" --disable-version-check --version 2>/dev/null)" && [[ "$have" == *"$SOPS_VERSION"* ]]; then
+    echo "[sops] ${have} already installed (from the image)"
+else
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64)          asset="linux.amd64"; want_sha="$SHA256_X86_64" ;;
+        aarch64 | arm64) asset="linux.arm64"; want_sha="$SHA256_AARCH64" ;;
+        *)
+            echo "ERROR: no sops build pinned for architecture '$arch'"
+            exit 1
+            ;;
+    esac
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+    url="https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.${asset}"
 
-echo "[sops] downloading v${SOPS_VERSION} (${asset})"
-# --retry rides out a transient 5xx from the release CDN; the timeouts keep a
-# hung connection from stalling container create indefinitely.
-curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 -o "$tmp/sops" "$url"
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
 
-# Verify BEFORE anything is made executable or moved onto PATH. sha256sum -c
-# exits non-zero on a mismatch, and `set -e` turns that into an aborted install
-# with the downloaded file still confined to $tmp.
-echo "[sops] verifying SHA-256"
-printf '%s  %s\n' "$want_sha" "$tmp/sops" | sha256sum -c -
+    echo "[sops] downloading v${SOPS_VERSION} (${asset})"
+    # --retry rides out a transient 5xx from the release CDN; the timeouts keep a
+    # hung connection from stalling container create indefinitely.
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 180 -o "$tmp/sops" "$url"
 
-echo "[sops] installing to ${INSTALL_PATH}"
-sudo install -o root -g root -m 0755 "$tmp/sops" "$INSTALL_PATH"
+    # Verify BEFORE anything is made executable or moved onto PATH. sha256sum -c
+    # exits non-zero on a mismatch, and `set -e` turns that into an aborted install
+    # with the downloaded file still confined to $tmp.
+    echo "[sops] verifying SHA-256"
+    printf '%s  %s\n' "$want_sha" "$tmp/sops" | sha256sum -c -
 
-# Smoke test that also catches a pin/asset mismatch. --disable-version-check
-# keeps this local: without it sops asks GitHub whether a newer release exists,
-# which is a network round trip in the middle of container create and, once the
-# firewall is up, a hang for anyone who runs the same command by hand.
-installed="$("$INSTALL_PATH" --disable-version-check --version)"
-echo "[sops] installed: ${installed}"
-case "$installed" in
-    *"$SOPS_VERSION"*) ;;
-    *)
-        echo "ERROR: installed binary reports '${installed}', expected ${SOPS_VERSION}"
-        exit 1
-        ;;
-esac
+    echo "[sops] installing to ${INSTALL_PATH}"
+    sudo install -o root -g root -m 0755 "$tmp/sops" "$INSTALL_PATH"
+
+    # Smoke test that also catches a pin/asset mismatch. --disable-version-check
+    # keeps this local: without it sops asks GitHub whether a newer release exists,
+    # which is a network round trip in the middle of container create and, once the
+    # firewall is up, a hang for anyone who runs the same command by hand.
+    installed="$("$INSTALL_PATH" --disable-version-check --version)"
+    echo "[sops] installed: ${installed}"
+    case "$installed" in
+        *"$SOPS_VERSION"*) ;;
+        *)
+            echo "ERROR: installed binary reports '${installed}', expected ${SOPS_VERSION}"
+            exit 1
+            ;;
+    esac
+fi
+
+[ "$binary_only" = true ] && exit 0
 
 # The key this is all for arrives as a readonly bind of the host's
 # ~/.config/sops (see mounts in devcontainer.json). Report on it rather than
