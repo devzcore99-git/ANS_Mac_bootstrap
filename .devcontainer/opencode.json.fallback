@@ -15,7 +15,7 @@
   // path-scoped rules that Claude Code loads only when it reads a matching
   // file, and opencode has no equivalent, so it should not swallow them.
   //
-  // A host-level override at ~/.config/devcontainer/opencode.json REPLACES
+  // A host-level override at ~/.config/devcontainer/opencode.jsonc REPLACES
   // this file rather than layering onto it, so any override must carry this
   // key too or its devpods lose the shared rules.
   "instructions": [".claude/rules/*.md"],
@@ -45,5 +45,23 @@
       }
     }
   },
-  "model": "ham51-2/qwen/qwen3.6-35b-a3b"
+  "model": "ham51-2/qwen/qwen3.6-35b-a3b",
+
+  // Pruning drops stale tool output incrementally instead of letting a session
+  // run up to a full summarizing rewrite; it is off by default.
+  //
+  // No "reserved" here, deliberately. It only applies to a model that declares
+  // limit.input (trigger = input - reserved); the models above declare
+  // context/output only, so their trigger is context - min(output, 32000) and
+  // a reserved value would be inert. It is also GLOBAL with no per-agent
+  // override: set it in a host override only after checking the smallest
+  // limit.input there, or a small model's trigger collapses to zero and it
+  // compacts on every step.
+  //
+  // No "model" either - one set here is dropped silently. The compaction model
+  // goes under "agent": { "compaction": { "model": ... } }.
+  "compaction": {
+    "auto": true,
+    "prune": true
+  }
 }
