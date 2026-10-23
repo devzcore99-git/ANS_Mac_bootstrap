@@ -61,6 +61,16 @@ apt:age
 # project that has no venv, not a replacement for one.
 apt:python3-pytest
 
+# Python itself, standing in for the python devcontainer feature, which the
+# template no longer uses (see the Dockerfile). Its default `os-provided` mode
+# installed Ubuntu's python3 anyway; these three are the parts of it anything
+# here relies on: pip, `python3 -m venv` for every project's .venv, and the
+# headers a source-only wheel needs to build. The feature also pulled in tk and
+# X11 development headers, which nothing here uses.
+apt:python3-pip
+apt:python3-venv
+apt:python3-dev
+
 # --- Shell niceties --------------------------------------------------------
 # fastfetch prints the OS / kernel / CPU / memory summary beside an ASCII logo.
 #

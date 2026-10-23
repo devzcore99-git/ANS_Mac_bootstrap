@@ -76,7 +76,9 @@ GRAPHIFY_VERSION="0.9.49"
 # own venv, still off the externally-managed system python — just not the
 # feature's copy. postCreateCommand runs it bare, which finds the pinned version
 # on PATH and stops; when the image step failed (it is non-fatal there too), the
-# bare run installs it the original way, through the feature's pipx.
+# bare run re-runs image mode under sudo. (The python feature, and its pipx, are
+# gone from the template entirely; the pip --user branch below is reachable only
+# by running this by hand without pipx.)
 if [ "${1:-}" = "--image" ]; then
     export PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin
     if ! command -v pipx >/dev/null 2>&1; then
@@ -98,6 +100,14 @@ if [ "${1:-}" != "--image" ] && have="$(graphify --version 2>/dev/null)" &&
    [[ "$have" == *"$GRAPHIFY_VERSION"* ]]; then
     echo "[graphify] ${have} already installed (from the image)"
     exit 0
+fi
+
+# Bare run and graphify is missing: the image step failed. Repeat it - same
+# pipx tree, same /usr/local/bin link - rather than the python feature's pipx,
+# which the template no longer has. Root for the same reason the build is.
+if [ "${1:-}" != "--image" ]; then
+    echo "[graphify] not in the image; installing it the image's way"
+    exec sudo bash "$0" --image
 fi
 
 echo "[graphify] installing graphifyy==${GRAPHIFY_VERSION}"

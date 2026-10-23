@@ -1,22 +1,21 @@
 {
   "name": "ANS_Mac_bootstrap",
-  //Built from .devcontainer/Dockerfile rather than pulled as a bare image: the
-  //Dockerfile is mcr.microsoft.com/devcontainers/base:ubuntu plus the base
-  //package list, sops, herdr and graphify, baked into layers every project
-  //shares through the build cache instead of re-installed on every create.
-  //Features below are applied ON TOP of it.  See the Dockerfile's header for
-  //what may and may not move there.
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "."
-  },
+  //A prebuilt local image, not a build: .devcontainer/build-image.sh (run by
+  //initializeCommand, on the host) builds the Dockerfile ONCE PER MACHINE under
+  //this tag, and every project's container starts from it - DevPod builds
+  //nothing, and Docker stores the image once however many projects use it.
+  //The tag is a hash of the Dockerfile and the files it copies, so it changes
+  //whenever they do: after editing any of them, set it to the output of
+  //`.devcontainer/build-image.sh --print-tag` (check.sh fails until you do).
+  "image": "dev-template:c3e83b420e9b",
+
+  //Empty on purpose.  node, gh, claude-code and python used to be features
+  //here; they are pinned steps in the Dockerfile now, because DevPod re-ran
+  //every feature on every create (~85 s) and gave each workspace a ~3 GB image
+  //of its own.  The three below stay as per-project opt-ins - uncommenting one
+  //makes DevPod build a derived image again, for that project only, and needs
+  //a re-lock (`devcontainer upgrade --workspace-folder .`).
   "features": {
-    "ghcr.io/devcontainers/features/node:2.1.0": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
-    //installTools off: the feature's twelve linters/formatters are baked into
-    //the image, pinned, by install-python-tools.sh instead - see that file.
-    "ghcr.io/devcontainers/features/python:1": { "installTools": false },
     //"ghcr.io/devcontainers/features/rust:1": {},
     //"ghcr.io/devcontainers/features/powershell:2": {},
     //"ghcr.io/devcontainers/features/azure-cli:1": {}
@@ -88,7 +87,10 @@
   //here turns that into an empty-but-correct mount, and leaves a real gh config
   //untouched.  ~/.config/sops is created for exactly the same reason, for the
   //readonly SOPS-keys bind further down.
-  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env ${localEnv:HOME}/.config/devcontainer/opencode.jsonc && mkdir -p ${localEnv:HOME}/.config/gh ${localEnv:HOME}/.config/sops",
+  //Last, it runs build-image.sh, which builds the image named in "image" above
+  //if this machine does not have it yet (a few minutes, once) and otherwise
+  //returns at once.  Fatal: without the image there is no container.
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/devcontainer && touch ${localEnv:HOME}/.config/devcontainer/llm.env ${localEnv:HOME}/.config/devcontainer/opencode.jsonc && mkdir -p ${localEnv:HOME}/.config/gh ${localEnv:HOME}/.config/sops && bash ${localWorkspaceFolder}/.devcontainer/build-image.sh",
 
   //Mount Claude Configuration from guest container 1 time
   //Auth token will be stored in volume and shared with other Docker containers
@@ -259,17 +261,19 @@
   //The base set is no longer installed here: the Dockerfile runs
   //`install-packages.sh base` at image build, where a failure fails the build
   //(the same fail-closed rule).  What runs here is `project` - packages.txt
-  //only - AFTER features (so node and python exist) and BEFORE
+  //only - from the image (so node and python exist) and BEFORE
   //postStartCommand raises the firewall (so nothing here needs an allow-list
   //entry).  Still on the fatal chain, though project entries are best-effort
   //and warn instead - the script, not this string, decides which is which.
   "onCreateCommand": "/bin/bash ${containerWorkspaceFolder}/.devcontainer/install-packages.sh project",
 
-  //Make sure the mounted directory can be read properly, then install opencode.
-  //opencode ships as an npm package that pulls a prebuilt binary for the
-  //platform from the registry, so it needs the node feature above and nothing
-  //else; `npm install -g` needs no sudo because the node feature owns the
-  //global prefix as vscode.  This runs at create time, before the firewall is
+  //Make sure the mounted directory can be read properly, then make sure of
+  //opencode.  It is baked into the image (the Dockerfile installs the same
+  //pinned version), so `command -v opencode` normally short-circuits this; the
+  //npm install below only runs when that image step failed.  opencode ships as
+  //an npm package that pulls a prebuilt binary for the platform from the
+  //registry; `npm install -g` needs no sudo because install-node.sh makes the
+  //global prefix vscode's, as the node feature did.  This runs at create time, before the firewall is
   //applied by postStartCommand, and registry.npmjs.org is allow-listed anyway,
   //so it works with the firewall on.
   //
@@ -376,7 +380,7 @@
   //NOT on the fatal chain for the same reason opencode and herdr are not: a
   //broken project hook should cost the container its setup, said out loud in
   //the create log, rather than cost you the container.
-  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-graphify.sh || echo \"[postCreate] WARNING: graphify install failed; the container is otherwise ready. Re-run .devcontainer/install-graphify.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-sops.sh || echo \"[postCreate] WARNING: sops install failed; the container is otherwise ready. Re-run .devcontainer/install-sops.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-python-tools.sh || echo \"[postCreate] WARNING: python tools incomplete; the container is otherwise ready. Rebuild the image to get them.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
+  "postCreateCommand": "/bin/bash -c 'sudo chown -R vscode:vscode /home/vscode/.claude && export NVM_DIR=\"${NVM_DIR:-/usr/local/share/nvm}\" && export PATH=\"$NVM_DIR/current/bin:$PATH\" && { command -v opencode >/dev/null || npm install -g opencode-ai@1.18.16 || echo \"[postCreate] WARNING: opencode install failed; the container is otherwise ready. Re-run the npm install by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-herdr.sh || echo \"[postCreate] WARNING: herdr install failed; the container is otherwise ready. Re-run .devcontainer/install-herdr.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-graphify.sh || echo \"[postCreate] WARNING: graphify install failed; the container is otherwise ready. Re-run .devcontainer/install-graphify.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-sops.sh || echo \"[postCreate] WARNING: sops install failed; the container is otherwise ready. Re-run .devcontainer/install-sops.sh by hand to get it.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/install-python-tools.sh || echo \"[postCreate] WARNING: python tools incomplete; the container is otherwise ready. Rebuild the image to get them.\"; } && { bash ${containerWorkspaceFolder}/.devcontainer/setup.sh || echo \"[postCreate] WARNING: .devcontainer/setup.sh failed; the container is otherwise ready. Fix it and re-run it by hand.\"; }'",
 
   //Two things on every start, in this order.
   //
