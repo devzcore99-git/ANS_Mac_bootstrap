@@ -15,9 +15,9 @@
 # twelve tools cost about 40 seconds of every new container - on every Agent
 # Swarm run. They also floated: the feature installs whatever PyPI has that
 # day, so two containers built on different days had different linters, against
-# this template's "pinned, never floating" rule. devcontainer.json now sets
-# `installTools: false`, and this script installs the same twelve here, pinned,
-# into a Dockerfile layer every project shares.
+# this template's "pinned, never floating" rule. The template has since dropped
+# the python feature altogether (see the Dockerfile), and this script installs
+# the same twelve here, pinned, into the shared image.
 #
 # These are machine-level CLIs, the same tools the feature put on PATH. A
 # project that needs a specific version of one as a LIBRARY - a pytest plugin,
@@ -37,7 +37,7 @@
 set -euo pipefail
 
 # Pinned. The set is the python feature's own `toolsToInstall` default, so
-# switching the feature's tools off removed nothing anyone had.
+# dropping the feature removed nothing anyone had.
 TOOLS=(
     "flake8==7.4.1"
     "autopep8==2.3.2"
@@ -54,17 +54,16 @@ TOOLS=(
 )
 
 # The image's pipx tree, shared with install-graphify.sh. Fixed paths rather
-# than PIPX_HOME from the environment: in the container that variable is the
-# python feature's /usr/local/py-utils, which is a different tree.
+# than PIPX_HOME from the environment, which a project may set for its own use.
 export PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin
 
 # Two callers, one script. The Dockerfile runs it with --image, as root, before
 # any feature exists - so pipx comes from the Ubuntu archive, as it does for
 # graphify. postCreateCommand runs it bare, which only checks: every tool
 # present at its pin, or a WARNING naming the ones that are not. It does not
-# install at create. With the feature's tools off there is no vscode-writable
-# pipx to install into, and twelve tools at create is the 40 seconds this
-# exists to remove; a failed image step is fixed by rebuilding the image.
+# install at create: the pipx tree is root's, and twelve tools at create is the
+# 40 seconds this exists to remove; a failed image step is fixed by rebuilding
+# the image.
 if [ "${1:-}" = "--image" ]; then
     if ! command -v pipx >/dev/null 2>&1; then
         echo "[python-tools] installing pipx from the Ubuntu archive"
@@ -96,7 +95,8 @@ for spec in "${TOOLS[@]}"; do
 done
 if [ -n "$off_pin" ]; then
     echo "[python-tools] WARNING: not at their pins:${off_pin}"
-    echo "[python-tools]          rebuild the image to get them (Rebuild Container)"
+    echo "[python-tools]          on the HOST: .devcontainer/build-image.sh --rebuild,"
+    echo "[python-tools]          then Rebuild Container"
     exit 1
 fi
 echo "[python-tools] all ${#TOOLS[@]} tools present at their pins"
